@@ -96,7 +96,7 @@
         <value>正在应用更新.....</value>
     </data>
     <data name="AppTitle" xml:space="preserve">
-        <value>MFA 任务管理器</value>
+        <value>MCC 任务管理器</value>
     </data>
     <data name="AutoDetect" xml:space="preserve">
         <value>AutoDetect (自动检测)</value>
@@ -105,10 +105,13 @@
         <value>自动检测更新</value>
     </data>
     <data name="AutomaticHide" xml:space="preserve">
-        <value>启动 MFA 后直接隐藏</value>
+        <value>启动 MCC 后直接隐藏</value>
     </data>
     <data name="AutomaticMinimize" xml:space="preserve">
-        <value>启动 MFA 后直接最小化</value>
+        <value>启动 MCC 后直接最小化</value>
+    </data>
+    <data name="MinimizeEmulatorAfterLaunch" xml:space="preserve">
+        <value>启动后模拟器最小化</value>
     </data>
     <data name="AutomaticUpdateMFA" xml:space="preserve">
         <value>自动更新软件</value>
@@ -424,7 +427,7 @@
         <value>创建 GitHub issue</value>
     </data>
     <data name="ErrorProlog" xml:space="preserve">
-        <value>MFA 遇到了问题</value>
+        <value>MCC 遇到了问题</value>
     </data>
     <data name="ExeFilter" xml:space="preserve">
         <value>可运行文件</value>
@@ -865,7 +868,7 @@
         <value>正在尝试重启 ADB Server</value>
     </data>
     <data name="RestartMFA" xml:space="preserve">
-        <value>重启MFA</value>
+        <value>重启MCC</value>
     </data>
     <data name="RestartPC" xml:space="preserve">
         <value>重启电脑</value>
@@ -976,7 +979,7 @@
             <value>启动游戏并启动脚本</value>
         </data>
         <data name="StartupScriptOnly" xml:space="preserve">
-            <value>仅启动脚本</value>
+            <value>开始任务</value>
         </data>
         <data name="Stopping" xml:space="preserve">
             <value>正在停止......</value>
@@ -988,7 +991,7 @@
         <value>停止任务</value>
     </data>
     <data name="SwitchConfiguration" xml:space="preserve">
-        <value>切换配置</value>
+        <value>账号/模拟器配置</value>
     </data>
     <data name="SwitchLanguage" xml:space="preserve">
         <value>切换语言 🌐</value>
@@ -1066,7 +1069,7 @@
         <value>自定义配置选择</value>
     </data>
     <data name="TimerCustomConfigTip" xml:space="preserve">
-        <value>开启后，定时任务将按各自选择的配置执行，而不是使用当前激活的配置</value>
+        <value>定时设置会同步到 Windows 任务计划程序；MFA 未运行时也会自动启动，并执行选定配置中的任务。电脑关机时无法触发。</value>
     </data>
     <data name="Tip" xml:space="preserve">
         <value>提示</value>
@@ -1147,28 +1150,28 @@
         <value>是</value>
     </data>
     <data name="CurrentConfig" xml:space="preserve">
-        <value>当前配置</value>
+        <value>当前账号/模拟器配置</value>
     </data>
     <data name="ViewOrSwitchConfig" xml:space="preserve">
-        <value>查看或切换已存在的配置方案</value>
+        <value>每个配置独立保存任务选择、任务参数和模拟器连接</value>
     </data>
     <data name="NewConfigName" xml:space="preserve">
-        <value>新增配置名称</value>
+        <value>新配置名称</value>
     </data>
     <data name="SetUniqueIdentifier" xml:space="preserve">
-        <value>为自定义配置设定唯一标识</value>
+        <value>建议使用账号或模拟器名称，便于定时任务选择</value>
     </data>
     <data name="CreateNewConfig" xml:space="preserve">
-        <value>新增配置</value>
+        <value>复制当前配置</value>
     </data>
     <data name="CreateFromCurrent" xml:space="preserve">
-        <value>基于当前配置创建新模板</value>
+        <value>复制当前任务列表、任务参数和连接设置创建新配置</value>
     </data>
     <data name="TriggerTime" xml:space="preserve">
         <value>触发时间</value>
     </data>
     <data name="SelectedConfig" xml:space="preserve">
-        <value>选用配置</value>
+        <value>执行配置</value>
     </data>
     <data name="ExternalNotificationOneBotKey" xml:space="preserve">
         <value>Key</value>
@@ -1517,7 +1520,7 @@
         <value>请删除整个文件夹重新下载，或联系项目维护者。</value>
     </data>
     <data name="NoEmulatorFoundDetail" xml:space="preserve">
-        <value>请确保模拟器的ADB功能打开状态，桥接模式为关闭状态，重启MFA和模拟器后重新尝试连接。</value>
+        <value>请确保模拟器的ADB功能打开状态，桥接模式为关闭状态，重启MCC和模拟器后重新尝试连接。</value>
     </data>
     <data name="Reset" xml:space="preserve">
         <value>重置</value>
@@ -1737,7 +1740,7 @@
             <value>缺少系统组件</value>
         </data>
         <data name="RuntimeMissingDescription" xml:space="preserve">
-            <value>MFAAvalonia 需要 Microsoft Visual C++ Redistributable (x64) 才能运行。</value>
+            <value>MCC 需要 Microsoft Visual C++ Redistributable (x64) 才能运行。</value>
         </data>
         <data name="DownloadAndInstall" xml:space="preserve">
             <value>下载并安装</value>
@@ -1773,7 +1776,7 @@
             <value>程序现在在临时目录里跑着呢，一关掉可能就没了。先把压缩包解压到一个文件夹里，再打开里面的程序吧。</value>
         </data>
         <data name="TempDirWarningHint" xml:space="preserve">
-            <value>小提示：建议解压到一个专门的文件夹，比如「D:\MFA」，别放桌面或者下载文件夹，那样更方便管理。</value>
+            <value>小提示：建议解压到一个专门的文件夹，比如「D:\MCC」，别放桌面或者下载文件夹，那样更方便管理。</value>
         </data>
     <data name="ExitProgram" xml:space="preserve">
         <value>退出程序</value>

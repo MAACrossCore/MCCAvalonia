@@ -48,8 +48,9 @@ public partial class TimerModel : ViewModelBase
 
     private TimerModel()
     {
-        CustomConfig = GlobalConfiguration.GetValue(ConfigurationKeys.CustomConfig, bool.FalseString) == bool.TrueString;
-        ForceScheduledStart = GlobalConfiguration.GetValue(ConfigurationKeys.ForceScheduledStart, bool.FalseString) == bool.TrueString;
+        // LAA 的定时任务始终绑定到明确的账号/模拟器配置。
+        CustomConfig = true;
+        ForceScheduledStart = false;
 
         var count = GlobalConfiguration.GetTimerCount(8);
         for (var i = 0; i < count; i++)
@@ -64,6 +65,7 @@ public partial class TimerModel : ViewModelBase
         _dispatcherTimer.Tick += CheckTimerElapsed;
         _dispatcherTimer.Start();
         PlatformTimerScheduler.RequestReschedule();
+        QueueSystemTaskSync();
     }
 
     [RelayCommand]
@@ -78,6 +80,7 @@ public partial class TimerModel : ViewModelBase
         Timers.Add(timer);
         GlobalConfiguration.SetTimerCount(Timers.Count);
         PlatformTimerScheduler.RequestReschedule();
+        QueueSystemTaskSync();
     }
 
     public void RemoveTimer(TimerProperties timer)
@@ -99,6 +102,23 @@ public partial class TimerModel : ViewModelBase
 
         GlobalConfiguration.SetTimerCount(Timers.Count);
         PlatformTimerScheduler.RequestReschedule();
+        QueueSystemTaskSync();
+    }
+
+    /// <summary>
+    /// Sync enabled timers into Windows Task Scheduler so they can start MFA when closed.
+    /// </summary>
+    internal void QueueSystemTaskSync()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var definitions = Timers.Select(timer => new SystemScheduledTaskManager.TimerDefinition(
+            timer.TimerId,
+            timer.IsOn,
+            timer.Time,
+            timer.ScheduleConfig.Serialize(),
+            timer.TimerConfig ?? string.Empty)).ToArray();
+        _ = SystemScheduledTaskManager.ReplaceAllAsync(definitions);
     }
 
     /// <summary>
@@ -229,16 +249,7 @@ public partial class TimerModel : ViewModelBase
     {
         var manager = MaaProcessorManager.Instance;
 
-        // 检查全局启动设置
-        var globalStartEnabled = GlobalConfiguration.GetValue(ConfigurationKeys.GlobalStartEnabled, bool.FalseString) == bool.TrueString;
-        if (globalStartEnabled && timer.TimerAction == TimerActionType.StartTask)
-        {
-            await StartAllEmulatorsAndRunTasks();
-            return;
-        }
-
-        // 原有逻辑
-        if (CustomConfig && !string.IsNullOrEmpty(timer.TimerConfig))
+        if (!string.IsNullOrEmpty(timer.TimerConfig))
         {
             var targetInstanceId = timer.TimerConfig;
             manager.EnsureInstanceLoaded(targetInstanceId);
@@ -270,35 +281,8 @@ public partial class TimerModel : ViewModelBase
 
     private void ExecuteAction(TimerProperties timer, TaskQueueViewModel vm)
     {
-        if (timer.TimerAction == TimerActionType.StopTask)
-        {
-            if (!vm.IsRunning) return;
-
-            if (timer.StopConnectedProcess && timer.StopMFA)
-            {
-                // 先关闭连接的进程，再关闭 MFA
-                vm.StopTask(() => MaaProcessor.CloseSoftware(vm.Processor, Instances.ShutdownApplication));
-            }
-            else if (timer.StopConnectedProcess)
-            {
-                vm.StopTask(() => MaaProcessor.CloseSoftware(vm.Processor));
-            }
-            else if (timer.StopMFA)
-            {
-                vm.StopTask(Instances.ShutdownApplication);
-            }
-            else
-            {
-                vm.StopTask();
-            }
-        }
-        else
-        {
-            if (ForceScheduledStart && vm.IsRunning)
-                vm.StopTask(vm.StartTask);
-            else
-                vm.StartTask();
-        }
+        if (!vm.IsRunning)
+            vm.StartTask();
     }
 
     /// <summary>
@@ -365,6 +349,7 @@ public partial class TimerModel : ViewModelBase
                 if (!SetProperty(ref _isOn, value)) return;
                 GlobalConfiguration.SetTimer(TimerId, value.ToString());
                 PlatformTimerScheduler.RequestReschedule();
+                _parent.QueueSystemTaskSync();
             }
         }
 
@@ -377,6 +362,7 @@ public partial class TimerModel : ViewModelBase
                 if (!SetProperty(ref _time, value)) return;
                 GlobalConfiguration.SetTimerTime(TimerId, value.ToString(@"h\:mm"));
                 PlatformTimerScheduler.RequestReschedule();
+                _parent.QueueSystemTaskSync();
             }
         }
 
@@ -391,6 +377,7 @@ public partial class TimerModel : ViewModelBase
             {
                 SetProperty(ref _timerConfig, value ?? string.Empty);
                 GlobalConfiguration.SetTimerConfig(TimerId, _timerConfig ?? string.Empty);
+                _parent.QueueSystemTaskSync();
             }
         }
 
@@ -404,6 +391,7 @@ public partial class TimerModel : ViewModelBase
                 GlobalConfiguration.SetTimerSchedule(TimerId, _scheduleConfig?.Serialize() ?? string.Empty);
                 OnPropertyChanged(nameof(ScheduleDisplayText));
                 PlatformTimerScheduler.RequestReschedule();
+                _parent.QueueSystemTaskSync();
             }
         }
 
@@ -456,6 +444,7 @@ public partial class TimerModel : ViewModelBase
             GlobalConfiguration.SetTimerSchedule(TimerId, _scheduleConfig.Serialize());
             OnPropertyChanged(nameof(ScheduleDisplayText));
             PlatformTimerScheduler.RequestReschedule();
+            _parent.QueueSystemTaskSync();
         }
 
         /// <summary>

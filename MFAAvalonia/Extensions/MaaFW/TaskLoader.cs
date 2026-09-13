@@ -441,8 +441,7 @@ public class TaskLoader(MaaInterface? maaInterface, TaskQueueViewModel taskQueue
     }
 
 
-    private void UpdateExistingItem(DragItemViewModel oldItem, MaaInterface.MaaInterfaceTask newItem, bool updateName = false)
-    {
+    private void UpdateExistingItem(DragItemViewModel oldItem, MaaInterface.MaaInterfaceTask newItem, bool updateName = false)    {
         if (oldItem.InterfaceItem == null) return;
         if (updateName) oldItem.InterfaceItem.Name = newItem.Name;
         else if (oldItem.InterfaceItem.Name != newItem.Name) return;
@@ -456,6 +455,9 @@ public class TaskLoader(MaaInterface? maaInterface, TaskQueueViewModel taskQueue
         oldItem.InterfaceItem.Resource = newItem.Resource;
         oldItem.InterfaceItem.Controller = newItem.Controller;
         oldItem.InterfaceItem.Icon = newItem.Icon;
+        // LAA: 队列项复用的是存档里的旧对象，这里逐字段打补丁。
+        // 漏掉 Group 会让任务列表分组静默失效（旧存档里压根没有 group 字段）。
+        oldItem.InterfaceItem.Group = newItem.Group;
 
         // 更新图标
         oldItem.InterfaceItem.InitializeIcon();

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using MFAAvalonia.Helper;
 
 namespace MFAAvalonia.Extensions.MaaFW;
 
@@ -42,6 +43,33 @@ public static class PathFinder
 
     private static string FindOnWindows(string fileName)
     {
+        if (Path.IsPathRooted(fileName) && File.Exists(fileName))
+        {
+            return fileName;
+        }
+
+        var requestedName = Path.GetFileNameWithoutExtension(fileName);
+        if (!fileName.Contains(Path.DirectorySeparatorChar)
+            && !fileName.Contains(Path.AltDirectorySeparatorChar)
+            && (requestedName.Equals("python", StringComparison.OrdinalIgnoreCase)
+                || requestedName.Equals("python3", StringComparison.OrdinalIgnoreCase)))
+        {
+            var localPythonCandidates = new[]
+            {
+                Path.Combine(AppPaths.DataRoot, "python", "python.exe"),
+                Path.Combine(AppPaths.DataRoot, "python", "bin", "python3"),
+                Path.Combine(AppPaths.DataRoot, ".venv", "Scripts", "python.exe"),
+                Path.GetFullPath(Path.Combine(AppPaths.DataRoot, "..", ".venv", "Scripts", "python.exe"))
+            };
+            foreach (var candidate in localPythonCandidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
         // Windows 可执行文件扩展名
         var extensions = new[] { ".exe", ".cmd", ".bat", ".com", "" };
         

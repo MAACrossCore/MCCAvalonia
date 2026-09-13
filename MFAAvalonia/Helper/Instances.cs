@@ -588,6 +588,7 @@ public static partial class Instances
                 var start = StartSettingsUserControlModel;
                 start.AutoMinimize = ConfigurationManager.Current.GetValue(ConfigurationKeys.AutoMinimize, false);
                 start.AutoHide = ConfigurationManager.Current.GetValue(ConfigurationKeys.AutoHide, false);
+                start.MinimizeEmulatorAfterLaunch = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.MinimizeEmulatorAfterLaunch, false);
                 start.SoftwarePath = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.SoftwarePath, string.Empty);
                 start.EmulatorConfig = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
                 start.WaitSoftwareTime = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.WaitSoftwareTime, 60.0);

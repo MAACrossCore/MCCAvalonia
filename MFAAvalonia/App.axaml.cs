@@ -813,7 +813,7 @@ public partial class App : Application
                         if (downloadUrl != null)
                         {
                             // MB_YESNO | MB_ICONERROR = 0x04 | 0x10 = 0x14
-                            if (MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x14) == 6) // IDYES = 6
+                            if (MessageBox(IntPtr.Zero, shortMessage, $"MCC {title}", 0x14) == 6) // IDYES = 6
                             {
                                 Process.Start(new ProcessStartInfo(downloadUrl)
                                 {
@@ -823,7 +823,7 @@ public partial class App : Application
                         }
                         else
                         {
-                            MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10); // MB_ICONERROR
+                            MessageBox(IntPtr.Zero, shortMessage, $"MCC {title}", 0x10); // MB_ICONERROR
                         }
                     }
                 }
@@ -833,7 +833,7 @@ public partial class App : Application
                         ? message.Substring(0, 2048) + "...\n\n(Log truncated)"
                         : message;
 
-                    MessageBox(IntPtr.Zero, shortMessage, $"MFAAvalonia {title}", 0x10); // MB_ICONERROR
+                    MessageBox(IntPtr.Zero, shortMessage, $"MCC {title}", 0x10); // MB_ICONERROR
                 }
             }
             else

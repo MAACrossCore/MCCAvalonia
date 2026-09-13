@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using MFAAvalonia.Configuration;
 using MFAAvalonia.Extensions;
 using MFAAvalonia.Extensions.MaaFW;
@@ -64,6 +64,20 @@ public partial class DragItemViewModel : ObservableObject
 
     /// <summary>验证不通过时标记为 true，用于 UI 红圈提示</summary>
     [ObservableProperty] [JsonIgnore] private bool _hasValidationError;
+
+    // LAA: 任务列表的「分组表头」。表头不占用独立行，而是画在组内第一行的顶部；
+    // 折叠时把该行的任务内容一起隐藏，视觉上就等同于只剩一个表头。
+    // 这样完全不改变 TaskItemViewModels 的构成，也就不必去动那 60+ 处
+    // 按 IsResourceOptionItem 过滤的逻辑（漏改一处就可能把 null 存进配置）。
+    // 分组来源：interface.json 顶层的 group 定义 + 各任务自己的 group 字段。
+    [ObservableProperty] [JsonIgnore] private string? _groupKey;
+    [ObservableProperty] [JsonIgnore] private string? _groupLabel;
+    [ObservableProperty] [JsonIgnore] private bool _hasGroupHeader;
+    [ObservableProperty] [JsonIgnore] private bool _isGroupExpanded = true;
+    [ObservableProperty] [JsonIgnore] private bool _isHiddenByGroup;
+    // 折叠时「首成员」那一行要保留表头、只藏任务内容，
+    // 所以不能复用 IsHiddenByGroup（首成员永远是 false），需要单独一个标记。
+    [ObservableProperty] [JsonIgnore] private bool _isTaskContentHidden;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsRunStatusVisible))]

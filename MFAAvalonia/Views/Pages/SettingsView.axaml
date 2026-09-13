@@ -33,6 +33,7 @@
             <suki:SettingsLayout Name="SettingsLayout" ScrollAnimationSpeed="3" MinWidthWhetherStackSummaryShow="700"
                                  StackSummaryWidth="220">
                 <suki:SettingsLayout.Items>
+                    <!-- LAA: simplified settings -->
                     <suki:SettingsLayoutItem
                         Content="{extensions:ServiceProvider ServiceType={x:Type settings:ConfigurationMgrUserControl}}"
                         Header="{markup:I18n {x:Static helper:LangKeys.SwitchConfiguration}}" />
@@ -54,12 +55,6 @@
                     <suki:SettingsLayoutItem
                         Content="{extensions:ServiceProvider ServiceType={x:Type settings:GuiSettingsUserControl}}"
                         Header="{markup:I18n {x:Static helper:LangKeys.UiSettings}}" />
-                    <suki:SettingsLayoutItem
-                        Content="{extensions:ServiceProvider ServiceType={x:Type settings:ExternalNotificationSettingsUserControl}}"
-                        Header="{markup:I18n {x:Static helper:LangKeys.ExternalNotificationSettings}}" />
-                    <suki:SettingsLayoutItem
-                        Content="{extensions:ServiceProvider ServiceType={x:Type settings:HotKeySettingsUserControl}}"
-                        Header="{markup:I18n {x:Static helper:LangKeys.HotKeySettings}}" />
                     <suki:SettingsLayoutItem
                         Content="{extensions:ServiceProvider ServiceType={x:Type settings:VersionUpdateSettingsUserControl}}"
                         Header="{markup:I18n {x:Static helper:LangKeys.UpdateSettings}}" />

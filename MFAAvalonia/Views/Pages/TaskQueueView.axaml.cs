@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
@@ -35,6 +35,7 @@ using Lang.Avalonia.MarkupExtensions;
 using MaaFramework.Binding;
 using MFAAvalonia.Views.Windows;
 using MFAAvalonia.Views.UserControls.Settings;
+using MFAAvalonia.Features.ChipFilter;
 using Newtonsoft.Json.Linq;
 using SukiUI.Dialogs;
 using SukiUI.Controls;
@@ -52,6 +53,10 @@ public partial class TaskQueueView : UserControl
 
     private const double TopToolbarCompactWidthThreshold = 980;
     private bool _isTopToolbarCompact;
+    private bool _chipFilterPlanWindowOpen;
+
+    private static bool UseChipTaskCheckBox(string? name) =>
+        name == "根据自定义设置锁定/解锁仓库内芯片";
 
 
     public TaskQueueView()
@@ -234,7 +239,10 @@ public partial class TaskQueueView : UserControl
 
         foreach (var container in TaskListBox.GetVisualDescendants().OfType<ListBoxItem>())
         {
-            container.IsVisible = container.DataContext is not DragItemViewModel item || item.IsTaskSupported;
+            // LAA: 这里原来是无条件 item.IsTaskSupported，会把分组折叠的隐藏结果覆盖掉
+            // （容器变可见、内容却是隐藏的 -> 拖拽后多出一个空行）。
+            // 统一走 ApplyGroupRowVisibility，让它同时考虑 IsTaskSupported 与分组状态。
+            ApplyGroupRowVisibility(container);
         }
     }
 
@@ -657,6 +665,9 @@ public partial class TaskQueueView : UserControl
         if (DataContext is not TaskQueueViewModel vm) return;
 
         if (!init)
+            ChipFilterPlanButton.IsVisible = value && UsesChipFilterPlan(dragItem);
+
+        if (!init)
             vm.IsCommon = true;
 
         // 竖屏模式下，打开 Popup 而不是在左侧面板显示
@@ -784,6 +795,107 @@ public partial class TaskQueueView : UserControl
             //     // 两者都有或都没有：正常显示
             //     SetNormalMode(hasIntroduction);
             // }
+        }
+    }
+
+    private static bool UsesChipFilterPlan(DragItemViewModel dragItem) =>
+        dragItem.InterfaceItem?.Entry is "ChipDetailReadTask" or "出击任务列表";
+
+    private void ChipFilterPlanButton_OnClick(object? sender, RoutedEventArgs e) =>
+        OpenChipFilterPlanWindow();
+
+    /// <summary>
+    /// LAA: 折叠分组时，组内非表头成员连整个 ListBoxItem 一起隐藏。
+    /// 只藏模板内容的话容器仍在，主题的 Padding 会撑出一个可 hover 的空行。
+    /// 样式 Setter 绑 IsVisible 在这套主题下不生效，所以在容器生成时直接设。
+    /// </summary>
+    private bool _groupRowSyncHooked;
+
+    private void TaskListBox_OnContainerPrepared(object? sender, ContainerPreparedEventArgs e)
+    {
+        if (e.Container is not ListBoxItem container) return;
+        HookGroupRowSync();
+        ApplyGroupRowVisibility(container);
+        if (container.DataContext is DragItemViewModel vm)
+        {
+            vm.PropertyChanged -= GroupRowVisibility_OnPropertyChanged;
+            vm.PropertyChanged += GroupRowVisibility_OnPropertyChanged;
+        }
+    }
+
+    /// <summary>
+    /// LAA: ListBox 在 Move 之后会回收复用 ListBoxItem（换个 DataContext 接着用），
+    /// 复用的容器既不会触发 ContainerPrepared、也不一定触发项的 PropertyChanged，
+    /// 于是它停在上一次的可见性状态 —— 表现为拖拽后多出一个「容器可见但内容隐藏」的空行
+    /// （折叠再展开时因为重算了标记才消失）。
+    /// 这里在每次集合变化后把所有已生成容器的可见性全量重套一遍，直接消除滞后。
+    /// </summary>
+    private void HookGroupRowSync()
+    {
+        if (_groupRowSyncHooked) return;
+        if (DataContext is not TaskQueueViewModel vm) return;
+        _groupRowSyncHooked = true;
+        vm.TaskItemViewModels.CollectionChanged += (_, _) =>
+            Dispatcher.UIThread.Post(RefreshAllGroupRows, DispatcherPriority.Background);
+    }
+
+    private void RefreshAllGroupRows() => UpdateTaskItemContainerVisibility();
+
+    private void GroupRowVisibility_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(DragItemViewModel.IsHiddenByGroup)))
+            return;
+        if (sender is not DragItemViewModel vm) return;
+        foreach (var container in TaskListBox.GetVisualDescendants().OfType<ListBoxItem>())
+        {
+            if (ReferenceEquals(container.DataContext, vm)) ApplyGroupRowVisibility(container);
+        }
+    }
+
+    /// <summary>
+    /// LAA: 任务行容器可见性的唯一判定处。
+    /// 空行的特征是「容器可见但里面什么都没画」：内容面板由 IsTaskContentHidden 控制、
+    /// 表头由 HasGroupHeader 控制。把三者与原有的 IsTaskSupported 一起算，
+    /// 无论状态因何产生（容器复用滞后、刷新时序、被别处覆盖）都渲染不出空行。
+    /// </summary>
+    private static void ApplyGroupRowVisibility(ListBoxItem container)
+    {
+        if (container.DataContext is not DragItemViewModel vm)
+        {
+            container.IsVisible = true;
+            return;
+        }
+
+        // 只用两个稳定条件：受支持 + 没被分组折叠隐藏。
+        // 不要依赖 IsTaskContentHidden —— 本方法会在集合变化后被调用，
+        // 那时分组标记可能还是旧的，会误把正常行判成空壳而隐藏（曾把组内任务整行弄没）。
+        container.IsVisible = vm.IsTaskSupported && !vm.IsHiddenByGroup;
+    }
+
+    /// <summary>LAA: 点击分组表头折叠/展开。表头本身没有别的功能。</summary>
+    private void TaskGroupHeader_OnClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: DragItemViewModel item }
+            && !string.IsNullOrEmpty(item.GroupKey)
+            && DataContext is TaskQueueViewModel vm)
+        {
+            vm.ToggleTaskGroup(item.GroupKey);
+        }
+        e.Handled = true;
+    }
+
+    private async void OpenChipFilterPlanWindow()
+    {
+        if (_chipFilterPlanWindowOpen)
+            return;
+        _chipFilterPlanWindowOpen = true;
+        try
+        {
+            await ChipFilterPlanWindow.ShowForCurrentProjectAsync(TopLevel.GetTopLevel(this) as Window);
+        }
+        finally
+        {
+            _chipFilterPlanWindowOpen = false;
         }
     }
 
@@ -1887,6 +1999,8 @@ public partial class TaskQueueView : UserControl
     {
         // 外层容器，包含主选项和子配置项
         var outerContainer = new StackPanel();
+        var useChipTaskCheckBox = UseChipTaskCheckBox(option.Name);
+        var useCompactChipTaskCheckBox = useChipTaskCheckBox;
 
         // 子配置项容器
         var subOptionsContainer = new StackPanel
@@ -1894,20 +2008,38 @@ public partial class TaskQueueView : UserControl
             Margin = new Thickness(0) // 由 Border 的 Padding 控制间距
         };
 
-        var button = new ToggleSwitch
+        ToggleButton button;
+        if (useChipTaskCheckBox)
         {
-            IsChecked = option.Index == yesValue,
-            Classes =
+            button = new CheckBox
             {
-                "Switch"
-            },
-            MaxHeight = 60,
-            MaxWidth = 100,
-            Margin = new Thickness(0, 4, 0, 4),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Tag = option.Name,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+                IsChecked = option.Index == yesValue,
+                Width = useCompactChipTaskCheckBox ? 18 : 24,
+                Height = useCompactChipTaskCheckBox ? 18 : 24,
+                MinWidth = useCompactChipTaskCheckBox ? 18 : 24,
+                MinHeight = useCompactChipTaskCheckBox ? 18 : 24,
+                Margin = useCompactChipTaskCheckBox
+                    ? new Thickness(4, 4, 0, 4)
+                    : new Thickness(0, 4, 0, 4),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Tag = option.Name,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+        else
+        {
+            button = new ToggleSwitch
+            {
+                IsChecked = option.Index == yesValue,
+                Classes = { "Switch" },
+                MaxHeight = 60,
+                MaxWidth = 100,
+                Margin = new Thickness(0, 4, 0, 4),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Tag = option.Name,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
 
         button.Bind(IsEnabledProperty, new Binding("Idle")
         {
@@ -1966,7 +2098,8 @@ public partial class TaskQueueView : UserControl
         {
             FontSize = 14,
             Margin = new Thickness(10, 0, 5, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextTrimming = useChipTaskCheckBox ? TextTrimming.None : TextTrimming.CharacterEllipsis,
+            TextWrapping = useChipTaskCheckBox ? TextWrapping.Wrap : TextWrapping.NoWrap,
             VerticalAlignment = VerticalAlignment.Center
         };
         textBlock.Bind(TextBlock.TextProperty, new ResourceBindingWithFallback(option.DisplayName, option.Name));
@@ -1982,20 +2115,24 @@ public partial class TaskQueueView : UserControl
                 },
                 new ColumnDefinition
                 {
-                    Width = new GridLength(1, GridUnitType.Star)
+                    Width = useChipTaskCheckBox ? GridLength.Auto : new GridLength(1, GridUnitType.Star)
                 },
                 new ColumnDefinition
                 {
-                    Width = GridLength.Auto
+                    Width = useChipTaskCheckBox ? new GridLength(1, GridUnitType.Star) : GridLength.Auto
                 }
             },
             Margin = new Thickness(0, 6, 10, 6)
         };
         var stackPanel = new StackPanel
         {
-            Orientation = Orientation.Horizontal,
+            Orientation = useChipTaskCheckBox ? Orientation.Vertical : Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = useChipTaskCheckBox ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
+            ClipToBounds = useCompactChipTaskCheckBox,
+            Margin = useCompactChipTaskCheckBox
+                ? new Thickness(0, 0, 4, 0)
+                : useChipTaskCheckBox ? new Thickness(0, 0, 10, 0) : new Thickness(0),
         };
 
         // 添加图标（使用数据绑定支持动态更新）
@@ -2027,7 +2164,7 @@ public partial class TaskQueueView : UserControl
         }
 
         Grid.SetColumn(stackPanel, 0);
-        Grid.SetColumn(button, 2);
+        Grid.SetColumn(button, useChipTaskCheckBox ? 1 : 2);
         grid.Children.Add(stackPanel);
         grid.Children.Add(button);
 

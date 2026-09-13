@@ -22,8 +22,6 @@ namespace MFAAvalonia.ViewModels.UsersControls.Settings;
 
 public partial class StartSettingsUserControlModel : ViewModelBase
 {
-    private readonly LocalizationViewModel _closeSoftwareItem = new(LangKeys.CloseEmulator);
-    private readonly LocalizationViewModel _closeSoftwareAndMFAItem = new(LangKeys.CloseEmulatorAndMFA);
     private readonly LocalizationViewModel _closeSoftwareAndRestartMFAItem = new(LangKeys.CloseEmulatorAndRestartMFA);
     private readonly AvaloniaList<LocalizationViewModel> _afterTaskList;
     private TaskQueueViewModel? _trackedTaskQueueViewModel;
@@ -43,14 +41,12 @@ public partial class StartSettingsUserControlModel : ViewModelBase
         _afterTaskList =
         [
             new(LangKeys.None),
-            new(LangKeys.CloseMFA),
-            _closeSoftwareItem,
-            _closeSoftwareAndMFAItem,
             new(LangKeys.ShutDown),
-            new(LangKeys.ShutDownOnce),
             _closeSoftwareAndRestartMFAItem,
             new(LangKeys.RestartPC),
         ];
+        BeforeTask = NormalizeBeforeTask(BeforeTask);
+        AfterTask = NormalizeAfterTask(AfterTask);
     }
 
     protected override void Initialize()
@@ -77,6 +73,8 @@ public partial class StartSettingsUserControlModel : ViewModelBase
 
     [ObservableProperty] private bool _autoHide = ConfigurationManager.Current.GetValue(ConfigurationKeys.AutoHide, false);
 
+    [ObservableProperty] private bool _minimizeEmulatorAfterLaunch = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.MinimizeEmulatorAfterLaunch, false);
+
     [ObservableProperty] private string _softwarePath = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.SoftwarePath, string.Empty);
 
     [ObservableProperty] private string _emulatorConfig = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
@@ -92,6 +90,11 @@ public partial class StartSettingsUserControlModel : ViewModelBase
     partial void OnAutoHideChanged(bool value)
     {
         ConfigurationManager.Current.SetValue(ConfigurationKeys.AutoHide, value);
+    }
+
+    partial void OnMinimizeEmulatorAfterLaunchChanged(bool value)
+    {
+        ConfigurationManager.CurrentInstance.SetValue(ConfigurationKeys.MinimizeEmulatorAfterLaunch, value);
     }
 
     partial void OnSoftwarePathChanged(string value)
@@ -151,10 +154,21 @@ public partial class StartSettingsUserControlModel : ViewModelBase
     public AvaloniaList<LocalizationViewModel> BeforeTaskList =>
     [
         new("None"),
-        new("StartupSoftware"),
-        new("StartupSoftwareAndScript"),
         new("StartupScriptOnly"),
     ];
+
+    internal static string NormalizeBeforeTask(string? value) =>
+        string.Equals(value, "StartupScriptOnly", StringComparison.OrdinalIgnoreCase)
+            ? "StartupScriptOnly"
+            : "None";
+
+    internal static string NormalizeAfterTask(string? value) => value switch
+    {
+        "ShutDown" => "ShutDown",
+        "CloseEmulatorAndRestartMFA" => "CloseEmulatorAndRestartMFA",
+        "RestartPC" => "RestartPC",
+        _ => "None"
+    };
 
     public AvaloniaList<LocalizationViewModel> AfterTaskList => _afterTaskList;
 
@@ -164,15 +178,27 @@ public partial class StartSettingsUserControlModel : ViewModelBase
     partial void OnBeforeTaskChanged(string? value)
     {
         if (_isSynchronizingStartupSettings) return;
-        ConfigurationManager.CurrentInstance.SetValue(ConfigurationKeys.BeforeTask, value);
-        SyncCurrentGlobalEntry(entry => entry.BeforeTask = value);
+        var normalized = NormalizeBeforeTask(value);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            BeforeTask = normalized;
+            return;
+        }
+        ConfigurationManager.CurrentInstance.SetValue(ConfigurationKeys.BeforeTask, normalized);
+        SyncCurrentGlobalEntry(entry => entry.BeforeTask = normalized);
     }
 
     [ObservableProperty] private string? _afterTask = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.AfterTask, "None");
 
     partial void OnAfterTaskChanged(string? value)
     {
-        ConfigurationManager.CurrentInstance.SetValue(ConfigurationKeys.AfterTask, value);
+        var normalized = NormalizeAfterTask(value);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            AfterTask = normalized;
+            return;
+        }
+        ConfigurationManager.CurrentInstance.SetValue(ConfigurationKeys.AfterTask, normalized);
     }
 
     [RelayCommand]
@@ -377,8 +403,6 @@ public partial class StartSettingsUserControlModel : ViewModelBase
 
     private void UpdateAfterTaskDisplayNames()
     {
-        _closeSoftwareItem.Name = (_isAdbController ? LangKeys.CloseEmulator : LangKeys.CloseTargetProgram).ToLocalization();
-        _closeSoftwareAndMFAItem.Name = (_isAdbController ? LangKeys.CloseEmulatorAndMFA : LangKeys.CloseTargetProgramAndMFA).ToLocalization();
         _closeSoftwareAndRestartMFAItem.Name = (_isAdbController
             ? LangKeys.CloseEmulatorAndRestartMFA
             : LangKeys.CloseTargetProgramAndRestartMFA).ToLocalization();
@@ -400,7 +424,9 @@ public partial class GlobalStartInstanceEntry : ObservableObject
         InstanceId = instanceId;
         InstanceName = instanceName;
         _configuration = configuration;
-        _beforeTask = configuration.GetValue(ConfigurationKeys.BeforeTask, "None");
+        _beforeTask = StartSettingsUserControlModel.NormalizeBeforeTask(
+            configuration.GetValue(ConfigurationKeys.BeforeTask, "None"));
+        configuration.SetValue(ConfigurationKeys.BeforeTask, _beforeTask);
         _softwarePath = configuration.GetValue(ConfigurationKeys.SoftwarePath, string.Empty);
         _emulatorConfig = configuration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
         _waitSoftwareTime = configuration.GetValue(ConfigurationKeys.WaitSoftwareTime, 60.0);
@@ -413,8 +439,6 @@ public partial class GlobalStartInstanceEntry : ObservableObject
     public AvaloniaList<LocalizationViewModel> BeforeTaskList { get; } =
     [
         new("None"),
-        new("StartupSoftware"),
-        new("StartupSoftwareAndScript"),
         new("StartupScriptOnly")
     ];
 
@@ -430,7 +454,13 @@ public partial class GlobalStartInstanceEntry : ObservableObject
 
     partial void OnBeforeTaskChanged(string? value)
     {
-        _configuration.SetValue(ConfigurationKeys.BeforeTask, value ?? "None");
+        var normalized = StartSettingsUserControlModel.NormalizeBeforeTask(value);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            BeforeTask = normalized;
+            return;
+        }
+        _configuration.SetValue(ConfigurationKeys.BeforeTask, normalized);
         _parent.SyncCurrentSettingsFromEntry(this);
     }
 

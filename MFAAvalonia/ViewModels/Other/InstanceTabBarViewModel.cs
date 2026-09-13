@@ -522,7 +522,8 @@ public partial class InstanceTabBarViewModel : ViewModelBase
     private async Task AddInstanceCoreAsync(MaaInterface.MaaInterfacePreset? preset)
     {
         using var _ = BeginInstanceLogScope("AddInstance");
-        var lastTab = Tabs.LastOrDefault();
+        // 新配置应复制用户当前正在查看和编辑的配置，而不是固定复制最右侧标签。
+        var lastTab = ActiveTab ?? Tabs.LastOrDefault();
 
         // 先将最右侧实例的当前任务列表（含勾选状态）保存到配置
         var lastVm = lastTab?.TaskQueueViewModel;

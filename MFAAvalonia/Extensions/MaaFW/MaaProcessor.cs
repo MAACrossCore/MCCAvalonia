@@ -1657,9 +1657,21 @@ public class MaaProcessor
         try
         {
             var preTaskExecuted = await RunPreTasksAsync(token);
-            if (preTaskExecuted && ViewModel?.CurrentController != MaaControllerTypes.PlayCover && ViewModel?.CurrentDevice == null)
+            if (preTaskExecuted)
             {
-                await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
+                // LAA 的 MuMu pretask 会把自动检测到的 ADB、启动程序路径和
+                // 实例参数写回当前实例配置。立即刷新内存配置，避免后续连接
+                // 用旧值覆盖磁盘，同时让已打开的启动设置页面同步显示新路径。
+                InstanceConfiguration.ReloadFromDisk();
+                if (MaaProcessorManager.Instance.Current.InstanceId == InstanceId)
+                    await Instances.ReloadConfigurationForSwitchAsync(refreshTask: false);
+
+                // 启动前必须重扫设备（等同点一次「刷新」）。不能只在
+                // CurrentDevice == null 时才扫，否则已连着旧实例时会继续粘在旧设备上。
+                if (ViewModel?.CurrentController != MaaControllerTypes.PlayCover)
+                {
+                    await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
+                }
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -2667,19 +2679,53 @@ public class MaaProcessor
             if (preTask.Resource is { Count: > 0 }
                 && !preTask.Resource.Any(name => string.Equals(name, resourceName, StringComparison.OrdinalIgnoreCase))) continue;
 
-            var exec = MaaInterface.ReplacePlaceholder(preTask.Exec, ResourceBase) ?? preTask.Exec;
+            var exec = MaaInterface.ReplacePlaceholder(preTask.Exec, AppPaths.DataRoot, true) ?? preTask.Exec;
+            var executablePath = PathFinder.FindPath(exec);
+            if (!File.Exists(executablePath)
+                && string.Equals(Path.GetFileNameWithoutExtension(preTask.Exec), "python", StringComparison.OrdinalIgnoreCase))
+            {
+                var localPythonCandidates = new[]
+                {
+                    Path.Combine(AppPaths.DataRoot, "python", "python.exe"),
+                    Path.Combine(AppPaths.DataRoot, "python", "bin", "python3"),
+                    Path.Combine(AppPaths.DataRoot, ".venv", "Scripts", "python.exe"),
+                    Path.GetFullPath(Path.Combine(AppPaths.DataRoot, "..", ".venv", "Scripts", "python.exe")),
+                    Path.Combine(AppPaths.DataRoot, ".venv", "bin", "python3"),
+                    Path.GetFullPath(Path.Combine(AppPaths.DataRoot, "..", ".venv", "bin", "python3"))
+                };
+                executablePath = localPythonCandidates.FirstOrDefault(File.Exists) ?? executablePath;
+            }
+            else if (!File.Exists(executablePath))
+            {
+                var bundledPythonCandidates = new[]
+                {
+                    Path.GetFullPath(Path.Combine(AppPaths.DataRoot, exec.TrimStart('.', '/', '\\'))),
+                    Path.Combine(AppPaths.DataRoot, "python", "python.exe"),
+                    Path.Combine(AppPaths.DataRoot, "python", "bin", "python3")
+                };
+                executablePath = bundledPythonCandidates.FirstOrDefault(File.Exists) ?? executablePath;
+            }
+
+            if (!File.Exists(executablePath))
+                throw new FileNotFoundException($"pretask executable not found: {preTask.Exec}", executablePath);
+
             var info = new ProcessStartInfo
             {
-                FileName = exec,
-                WorkingDirectory = ResourceBase,
+                FileName = executablePath,
+                WorkingDirectory = AppPaths.DataRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            foreach (var arg in preTask.Args ?? []) info.ArgumentList.Add(arg);
+            info.Environment["MFA_INSTANCE_CONFIG_PATH"] = InstanceConfiguration.GetConfigFilePath();
+            foreach (var rawArg in preTask.Args ?? [])
+            {
+                var arg = MaaInterface.ReplacePlaceholder(rawArg, AppPaths.DataRoot, true) ?? rawArg;
+                info.ArgumentList.Add(arg);
+            }
             if (preTask.Option is { Count: > 0 })
                 info.ArgumentList.Add(BuildPreTaskOptionJson(preTask.Option, controllerName, resourceName));
 
-            LoggerHelper.Info($"执行 pretask：{preTask.Name ?? preTask.Exec}");
+            LoggerHelper.Info($"执行 pretask：{preTask.Name ?? preTask.Exec}，程序={executablePath}");
             executed = true;
             using var process = Process.Start(info) ?? throw new InvalidOperationException($"无法启动 pretask: {preTask.Exec}");
             await process.WaitForExitAsync(token);
@@ -4337,7 +4383,8 @@ public class MaaProcessor
             OwnerViewModel = ViewModel,
             SourceItem = sourceItem,
             RunId = runId,
-            ContinueOnError = InstanceConfiguration.GetValue(ConfigurationKeys.ContinueRunningWhenError, true)
+            // Project policy: a failed task must stop the queue instead of starting the next task.
+            ContinueOnError = false
         };
     }
 
@@ -4612,20 +4659,7 @@ public class MaaProcessor
         var afterTask = InstanceConfiguration.GetValue(ConfigurationKeys.AfterTask, "None");
         switch (afterTask)
         {
-            case "CloseMFA":
-                Instances.ShutdownApplication();
-                break;
-            case "CloseEmulator":
-                CloseSoftware(this);
-                break;
-            case "CloseEmulatorAndMFA":
-                CloseSoftwareAndMFA(this);
-                break;
             case "ShutDown":
-                Instances.ShutdownSystem();
-                break;
-            case "ShutDownOnce":
-                InstanceConfiguration.SetValue(ConfigurationKeys.AfterTask, "None");
                 Instances.ShutdownSystem();
                 break;
             case "CloseEmulatorAndRestartMFA":

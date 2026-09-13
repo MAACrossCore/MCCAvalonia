@@ -21,6 +21,8 @@ using MFAAvalonia.Views.Windows;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SukiUI.Dialogs;
+using SukiUI.Controls;
+using SukiUI.MessageBox;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -87,6 +89,11 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         IsRunning = _processorField.TaskQueue.Count > 0;
         _processorField.TaskQueue.CountChanged += OnTaskQueueCountChanged;
         LanguageHelper.LanguageChanged += OnLanguageChanged;
+
+        // LAA: 任务列表分组。TaskItemViewModels 初始化为 [] 之后一直是原地 Clear/Add，
+        // 属性 setter 永远不会触发，所以必须在 Initialize()（里面加载任务）之前就挂上监听，
+        // 否则分组表头一次都不会刷新出来。
+        TaskItemViewModels.CollectionChanged += OnTaskItemsCollectionChanged;
 
         // Re-initialize with the correct processor since base constructor might have used Current
         Initialize();
@@ -648,8 +655,242 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
 
     partial void OnTaskItemViewModelsChanged(ObservableCollection<DragItemViewModel> value)
     {
+        // LAA: 列表任何增删改（含拖拽排序）都重新算一次分组标记
+        value.CollectionChanged -= OnTaskItemsCollectionChanged;
+        value.CollectionChanged += OnTaskItemsCollectionChanged;
+        RefreshTaskGroups();
         if (ConfigurationManager.IsSwitching) return;
         Processor.InstanceConfiguration.SetValue(ConfigurationKeys.TaskItems, value.Where(model => !model.IsResourceOptionItem).Select(model => model.InterfaceItem).ToList());
+    }
+
+    // LAA ---------------------------------------------------------------
+    // 任务列表分组：纯显示层的折叠，表头本身没有任何功能，
+    // 组内任务与普通任务完全同级、各自独立勾选与执行。
+    //
+    // 只在「同一组的成员在队列里连续排列」时才成组；一旦被拖散，
+    // 该组自动退回普通显示，避免出现表头和成员分居两处的诡异画面。
+    private readonly Dictionary<string, bool> _taskGroupExpanded = new();
+    // 表头画在哪个成员上。必须是「粘性」的：用户拖的就是这个成员，
+    // 收拢要以它所在的位置为锚点。若每次刷新都重取「当前第一个成员」，
+    // 向下拖拽会被拉回原位（被拖的成员跑到后面，而留在原地的成员成了第一个）。
+    private readonly Dictionary<string, DragItemViewModel> _taskGroupHeaderCarrier = new();
+    private bool _refreshingTaskGroups;
+    private bool _groupCoalesceScheduled;
+
+    private void OnTaskItemsCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // LAA: 表头拖拽 = 整组移动。被拖的是哪一项，直接从事件里读 —— 这是权威来源。
+        // 之前靠「谁当前排第一」推断载体，渲染与判断会脱节（日志里出现过拖 A 却锚定 B），
+        // 这里改成：谁被拖，谁就成为该组的锚点，整组跟着它落到新位置，组内顺序不变。
+        DragItemViewModel? moved = e.Action switch
+        {
+            System.Collections.Specialized.NotifyCollectionChangedAction.Move
+                when e.NewStartingIndex >= 0 && e.NewStartingIndex < TaskItemViewModels.Count
+                => TaskItemViewModels[e.NewStartingIndex],
+            System.Collections.Specialized.NotifyCollectionChangedAction.Add
+                => e.NewItems?.OfType<DragItemViewModel>().FirstOrDefault(),
+            System.Collections.Specialized.NotifyCollectionChangedAction.Replace
+                => e.NewItems?.OfType<DragItemViewModel>().FirstOrDefault(),
+            _ => null,
+        };
+        // LAA: 表头拖拽 = 整组移动。被拖的是哪一项，直接从事件里读 —— 这是权威来源。
+        // 谁被拖，谁就成为该组的锚点；CoalesceOrder 会在锚点所在位置输出整组，
+        // 于是整组跟着它落到新位置（round 5 定位并验证过：这是"能向下拖"的关键）。
+        if (moved != null && TaskGroupKeyOf(moved) is { } movedKey)
+        {
+            _taskGroupHeaderCarrier[movedKey] = moved;
+        }
+
+        RefreshTaskGroups();
+        ScheduleGroupCoalesce();
+    }
+
+    /// <summary>
+    /// LAA: 把同组成员排到一起（保持组内相对顺序，整体落在首个成员的位置）。
+    /// 纯函数，只算目标顺序，不改集合。
+    /// </summary>
+    private List<DragItemViewModel> CoalesceOrder(IReadOnlyList<DragItemViewModel> items)
+    {
+        var result = new List<DragItemViewModel>(items.Count);
+        var emitted = new HashSet<string>();
+        foreach (var item in items)
+        {
+            var key = TaskGroupKeyOf(item);
+            if (key == null)
+            {
+                result.Add(item);
+                continue;
+            }
+
+            var carrier = CarrierOf(key, items);
+            var hasCarrier = carrier != null && items.Contains(carrier);
+
+            // 关键：整组只在「表头载体」出现的位置输出。
+            // 若在首个遇到的成员处输出，向下拖拽时（顺序变成 另一成员, 其它, 载体）
+            // 锚点会落到没被拖动的那个成员上，整组被拉回原位 —— 表现为下拽无效。
+            if (hasCarrier && !ReferenceEquals(item, carrier)) continue;
+            if (!emitted.Add(key)) continue;
+
+            if (hasCarrier) result.Add(carrier!);
+            foreach (var member in items)
+                if (TaskGroupKeyOf(member) == key && !ReferenceEquals(member, carrier))
+                    result.Add(member);
+        }
+        return result;
+    }
+
+    /// <summary>LAA: 该组的表头载体落在哪个成员上。</summary>
+    private DragItemViewModel? CarrierOf(string key, IReadOnlyList<DragItemViewModel> items)
+    {
+        if (_taskGroupHeaderCarrier.TryGetValue(key, out var carrier)
+            && carrier != null && items.Contains(carrier) && TaskGroupKeyOf(carrier) == key)
+        {
+            return carrier;
+        }
+        var first = items.FirstOrDefault(m => TaskGroupKeyOf(m) == key);
+        if (first != null) _taskGroupHeaderCarrier[key] = first;
+        return first;
+    }
+
+    /// <summary>LAA: 延后一次收拢，避免在 CollectionChanged 处理中直接改集合。</summary>
+    private void ScheduleGroupCoalesce()
+    {
+        if (_groupCoalesceScheduled) return;
+        _groupCoalesceScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _groupCoalesceScheduled = false;
+            ApplyGroupCoalesce();
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// LAA: 组成员被拖散时自动收回一起。
+    /// 分组表头画在组内第一行上，所以「拖表头」等于拖这个成员，
+    /// 收拢后其余成员会跟过来 —— 效果就是整组一起移动。
+    /// </summary>
+    private void ApplyGroupCoalesce()
+    {
+        if (_refreshingTaskGroups) return;
+
+        var items = TaskItemViewModels.ToList();
+        var desired = CoalesceOrder(items);
+        var same = desired.Count == items.Count;
+        if (same)
+        {
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (ReferenceEquals(items[i], desired[i])) continue;
+                same = false;
+                break;
+            }
+        }
+        if (same) return;
+
+        _refreshingTaskGroups = true;
+        try
+        {
+            for (var target = 0; target < desired.Count; target++)
+            {
+                var current = TaskItemViewModels.IndexOf(desired[target]);
+                if (current >= 0 && current != target) TaskItemViewModels.Move(current, target);
+            }
+        }
+        finally
+        {
+            _refreshingTaskGroups = false;
+        }
+
+        RefreshTaskGroups();
+    }
+
+    private static string? TaskGroupKeyOf(DragItemViewModel item)
+    {
+        var groups = item.InterfaceItem?.Group;
+        if (groups is { Count: > 0 } && !string.IsNullOrWhiteSpace(groups[0])) return groups[0];
+
+        // 兜底：队列项复用的是存档里的旧任务对象，部分加载路径不会把 interface.json 的
+        // group 拷过来。这里按 entry / name 回查一次顶层定义，避免分组静默失效。
+        var entry = item.InterfaceItem?.Entry;
+        var name = item.InterfaceItem?.Name;
+        var def = MaaProcessor.Interface?.Task?.FirstOrDefault(t =>
+            (!string.IsNullOrWhiteSpace(entry) && t.Entry == entry)
+            || (!string.IsNullOrWhiteSpace(name) && t.Name == name));
+        var fallback = def?.Group;
+        return fallback is { Count: > 0 } && !string.IsNullOrWhiteSpace(fallback[0])
+            ? fallback[0]
+            : null;
+    }
+
+    private static string TaskGroupLabelOf(string key)
+    {
+        var def = MaaProcessor.Interface?.Group?.FirstOrDefault(g => g.Name == key);
+        return LanguageHelper.GetLocalizedDisplayName(def?.Label, key);
+    }
+
+    private static void ClearTaskGroupFlags(DragItemViewModel item)
+    {
+        item.GroupKey = null;
+        item.GroupLabel = null;
+        item.HasGroupHeader = false;
+        item.IsHiddenByGroup = false;
+        item.IsTaskContentHidden = false;
+        item.IsGroupExpanded = true;
+    }
+
+    /// <summary>LAA: 按当前队列顺序重算分组表头与折叠可见性。</summary>
+    public void RefreshTaskGroups()
+    {
+        if (_refreshingTaskGroups) return;
+        _refreshingTaskGroups = true;
+        try
+        {
+            var items = TaskItemViewModels.ToList();
+            var index = 0;
+            while (index < items.Count)
+            {
+                var key = TaskGroupKeyOf(items[index]);
+                if (key == null)
+                {
+                    ClearTaskGroupFlags(items[index]);
+                    index++;
+                    continue;
+                }
+
+                var end = index;
+                while (end + 1 < items.Count && TaskGroupKeyOf(items[end + 1]) == key) end++;
+
+                var expanded = !_taskGroupExpanded.TryGetValue(key, out var known) || known;
+                var members = items.GetRange(index, end - index + 1);
+                var carrier = CarrierOf(key, items) ?? members[0];
+                foreach (var member in members)
+                {
+                    var isCarrier = ReferenceEquals(member, carrier);
+                    member.GroupKey = key;
+                    member.HasGroupHeader = isCarrier;
+                    member.GroupLabel = isCarrier ? TaskGroupLabelOf(key) : null;
+                    member.IsGroupExpanded = expanded;
+                    // 载体保留表头、只藏任务内容；其余成员整行隐藏
+                    member.IsHiddenByGroup = !expanded && !isCarrier;
+                    member.IsTaskContentHidden = !expanded;
+                }
+
+                index = end + 1;
+            }
+
+        }
+        finally
+        {
+            _refreshingTaskGroups = false;
+        }
+    }
+
+    /// <summary>LAA: 点击分组表头时切换该组折叠状态。</summary>
+    public void ToggleTaskGroup(string key)
+    {
+        var expanded = !_taskGroupExpanded.TryGetValue(key, out var known) || known;
+        _taskGroupExpanded[key] = !expanded;
+        RefreshTaskGroups();
     }
 
     [RelayCommand]
@@ -1164,8 +1405,20 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void ResetTasks()
+    private async Task ResetTasks()
     {
+        var result = await SukiMessageBox.ShowDialog(new SukiMessageBoxHost
+        {
+            Content = "当前操作会重置任务列表中所有已有设置，是否继续？",
+            ActionButtonsPreset = SukiMessageBoxButtons.YesNo,
+            IconPreset = SukiMessageBoxIcons.Warning
+        }, new SukiMessageBoxOptions
+        {
+            Title = "确认重置任务列表"
+        });
+        if (result is not SukiMessageBoxResult.Yes)
+            return;
+
         using var _ = BeginUiLogScope("ResetTasks");
         // 保留特殊任务（倒计时、系统通知等用户手动添加的自定义 Action 任务）
         var specialTasks = TaskItemViewModels

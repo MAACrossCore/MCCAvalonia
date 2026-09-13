@@ -122,17 +122,19 @@ internal static class GlobalStartManager
                 return GlobalStartResult.Failed;
             }
 
+            var startupAction = vm.Processor.InstanceConfiguration.GetValue(
+                ConfigurationKeys.BeforeTask,
+                "None");
+            if (!string.Equals(startupAction, "StartupScriptOnly", StringComparison.OrdinalIgnoreCase))
+            {
+                LoggerHelper.Info($"全局启动：实例 {instanceName} 的启动后操作为“无”，已跳过任务启动");
+                return GlobalStartResult.Skipped;
+            }
+
             if (vm.IsRunning)
             {
                 LoggerHelper.Info($"全局启动：实例 {instanceName} 正在运行，已跳过");
                 return GlobalStartResult.Skipped;
-            }
-
-            var beforeTask = vm.Processor.InstanceConfiguration.GetValue(ConfigurationKeys.BeforeTask, "None");
-            if (beforeTask.Contains("StartupSoftware", StringComparison.OrdinalIgnoreCase))
-            {
-                LoggerHelper.Info($"全局启动：按实例配置启动 {instanceName} 的目标程序");
-                await vm.Processor.StartSoftware();
             }
 
             await DispatcherHelper.RunOnMainThreadAsync(() =>
@@ -142,7 +144,16 @@ internal static class GlobalStartManager
                 vm.StartTask();
             });
 
-            return GlobalStartResult.Started;
+            // StartTask 会在资源、设备或任务参数无效时直接拒绝启动，不能仅凭调用成功
+            // 就把实例统计为“已启动”。等待 UI/任务队列状态完成一次异步同步后再判断。
+            for (var attempt = 0; attempt < 30 && !vm.IsRunning; attempt++)
+                await Task.Delay(100);
+
+            if (vm.IsRunning)
+                return GlobalStartResult.Started;
+
+            LoggerHelper.Warning($"全局启动：实例 {instanceName} 未进入运行状态，启动失败");
+            return GlobalStartResult.Failed;
         }
         catch (Exception ex)
         {

@@ -39,6 +39,7 @@ public static class LangKeys
 	public static readonly string AutomaticDetectionUpdate = "AutomaticDetectionUpdate";
 	public static readonly string AutomaticHide = "AutomaticHide";
 	public static readonly string AutomaticMinimize = "AutomaticMinimize";
+	public static readonly string MinimizeEmulatorAfterLaunch = "MinimizeEmulatorAfterLaunch";
 	public static readonly string AutomaticUpdateMFA = "AutomaticUpdateMFA";
 	public static readonly string AutomaticUpdateResource = "AutomaticUpdateResource";
 	public static readonly string AutoStartOption = "AutoStartOption";

@@ -36,6 +36,7 @@ public static class ConfigurationKeys
     public const string AfterTask = "AfterTask";
     public const string AutoMinimize = "AutoMinimize";
     public const string AutoHide = "AutoHide";
+    public const string MinimizeEmulatorAfterLaunch = "MinimizeEmulatorAfterLaunch";
     public const string SoftwarePath = "SoftwarePath";
     public const string WaitSoftwareTime = "WaitSoftwareTime";
     public const string EmulatorConfig = "EmulatorConfig";
@@ -227,6 +228,7 @@ public static class ConfigurationKeys
         SoftwarePath,
         WaitSoftwareTime,
         EmulatorConfig,
+        MinimizeEmulatorAfterLaunch,
         RememberAdb,
         UseFingerprintMatching,
         AdbControlScreenCapType,

@@ -404,6 +404,14 @@ public partial class RootView : SukiWindow
             var vm = Instances.InstanceTabBarViewModel.ActiveTab?.TaskQueueViewModel;
             if (vm == null) return;
 
+            var suppressAutoStartOnce = Convert.ToBoolean(
+                GlobalConfiguration.GetValue(ConfigurationKeys.NoAutoStart, bool.FalseString));
+            if (suppressAutoStartOnce)
+            {
+                GlobalConfiguration.SetValue(ConfigurationKeys.NoAutoStart, bool.FalseString);
+                LoggerHelper.Info("检测到一次性禁止自动启动标记：本次跳过启动后任务，并已清除该标记。");
+            }
+
             if (AppRuntime.IsAutoStart)
             {
                 StartCommandLineAutoRun(vm, AppRuntime.QuitAfterRun, AppRuntime.ForceStart);
@@ -412,7 +420,7 @@ public partial class RootView : SukiWindow
 
             // 全局启动设置：启动所有模拟器并执行所有实例任务
             var globalStartEnabled = GlobalConfiguration.GetValue(ConfigurationKeys.GlobalStartEnabled, bool.FalseString) == bool.TrueString;
-            if (globalStartEnabled && !Convert.ToBoolean(GlobalConfiguration.GetValue(ConfigurationKeys.NoAutoStart, bool.FalseString)))
+            if (globalStartEnabled && !suppressAutoStartOnce)
             {
                 DispatcherHelper.RunOnMainThread((Action)(async () =>
                 {
@@ -430,72 +438,6 @@ public partial class RootView : SukiWindow
                         await Task.Delay(300);
                         if ((MaaProcessor.Interface?.Controller?.Count ?? 0) == 1 || !ConfigurationManager.CurrentInstance.ContainsKey(ConfigurationKeys.CurrentController))
                             vm.CurrentController = (MaaProcessor.Interface?.Controller?.FirstOrDefault()?.Type).ToMaaControllerTypes(vm.CurrentController);
-                        var beforeTask = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.BeforeTask, "None");
-                        var startupScriptOnly = beforeTask.Equals("StartupScriptOnly", StringComparison.OrdinalIgnoreCase);
-                        var delayFingerprintMatching = beforeTask.Contains("StartupSoftware", StringComparison.OrdinalIgnoreCase);
-                        if (!Convert.ToBoolean(GlobalConfiguration.GetValue(ConfigurationKeys.NoAutoStart, bool.FalseString))
-                            && (beforeTask.Contains("Startup", StringComparison.OrdinalIgnoreCase) || startupScriptOnly))
-                        {
-                            // 只有当不是 StartupScriptOnly 时才启动游戏
-                            if (!startupScriptOnly)
-                            {
-                                vm.Processor.TaskQueue.Enqueue(new MFATask
-                                {
-                                    Name = "启动前",
-                                    Type = MFATask.MFATaskType.MFA,
-                                    Action = async () => await vm.Processor.WaitSoftware(),
-                                    OwnerViewModel = vm,
-                                });
-                            }
-                            // StartupScriptOnly 或 StartupSoftwareAndScript 时启动脚本 (onlyStart = false)
-                            // StartupSoftware 时只启动游戏不启动脚本 (onlyStart = true)
-                            var controllerType = vm.CurrentController;
-                            if (controllerType == MaaControllerTypes.PlayCover)
-                            {
-                                vm.TryReadPlayCoverConfig();
-                            }
-                            else if (ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.RememberAdb, true) && !delayFingerprintMatching)
-                            {
-                                vm.TryReadAdbDeviceFromConfig(false, false);
-                            }
-                            var onlyStart = beforeTask.Equals("StartupSoftware", StringComparison.OrdinalIgnoreCase);
-                            vm.Processor.Start(onlyStart, checkUpdate: false);
-                        }
-                        else
-                        {
-                            var controllerType = vm.CurrentController;
-                            var controllerKey = controllerType switch
-                            {
-                                MaaControllerTypes.Adb => "Emulator",
-                                MaaControllerTypes.Win32 => "Window",
-                                MaaControllerTypes.MacOS => "Window",
-                                MaaControllerTypes.PlayCover => "TabPlayCover",
-                                _ => "Window"
-                            };
-
-                            vm.AddLogByKey("ConnectingTo", (IBrush?)null, true, true, controllerKey);
-
-                            if (controllerType == MaaControllerTypes.PlayCover)
-                            {
-                                vm.TryReadPlayCoverConfig();
-                            }
-                            else
-                            {
-                                vm.TryReadAdbDeviceFromConfig();
-                            }
-
-                            vm.Processor.TaskQueue.Enqueue(new MFATask
-                            {
-                                Name = "连接检测",
-                                Type = MFATask.MFATaskType.MFA,
-                                Action = async () => await vm.Processor.TestConnecting(),
-                                OwnerViewModel = vm,
-                            });
-                            vm.Processor.Start(true, checkUpdate: false);
-                        }
-
-                        GlobalConfiguration.SetValue(ConfigurationKeys.NoAutoStart, bool.FalseString);
-
                         // 重新初始化控制器选项，确保 ControllerOptions 包含正确的控制器列表
                         // 因为 TaskQueueViewModel.Initialize() 可能在 MaaProcessor.Interface初始化之前被调用
                         vm.InitializeControllerOptions();
@@ -558,6 +500,23 @@ public partial class RootView : SukiWindow
                     await Task.Delay(300);
                     await AnnouncementViewModel.CheckAnnouncement();
                 }, name: "公告和最新版本检测");
+
+                TaskManager.RunTaskAsync(async () =>
+                {
+                    await Task.Delay(1500);
+                    var beforeTask = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.BeforeTask, "None");
+                    var shouldStartTasks = !suppressAutoStartOnce
+                        && beforeTask.Equals("StartupScriptOnly", StringComparison.OrdinalIgnoreCase);
+                    LoggerHelper.Info($"启动后操作检查：BeforeTask={beforeTask}, SuppressOnce={suppressAutoStartOnce}, StartTasks={shouldStartTasks}");
+                    if (!shouldStartTasks)
+                        return;
+
+                    await DispatcherHelper.RunOnMainThreadAsync(() =>
+                    {
+                        LoggerHelper.Info("启动后操作：开始执行当前配置的已选任务。");
+                        vm.StartTask();
+                    });
+                }, name: "启动后操作检查");
             }
             else
             {
