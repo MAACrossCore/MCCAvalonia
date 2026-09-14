@@ -302,6 +302,9 @@ public class TaskOptionGenerator(TaskQueueViewModel viewModel, Action saveConfig
                 AddAdvancedOption(panel, option);
             }
         }
+
+        // LAA: 面板生成完再统一处理选项之间的联动显示
+        ApplyConditionalOptionVisibility(panel);
     }
     
     public void GenerateResourceOptionPanelContent(StackPanel panel, DragItemViewModel dragItem)

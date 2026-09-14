@@ -1666,12 +1666,27 @@ public class MaaProcessor
                 if (MaaProcessorManager.Instance.Current.InstanceId == InstanceId)
                     await Instances.ReloadConfigurationForSwitchAsync(refreshTask: false);
 
-                // 启动前必须重扫设备（等同点一次「刷新」）。不能只在
-                // CurrentDevice == null 时才扫，否则已连着旧实例时会继续粘在旧设备上。
-                if (ViewModel?.CurrentController != MaaControllerTypes.PlayCover)
-                {
-                    await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
-                }
+                // LAA: 把「连接目标」同步成配置里刚写回的 ADB。
+                // pretask 会按用户选的 MuMu 实例改写配置里的 ADB；但 CurrentDevice 不会被
+                // ReloadFromDisk 更新，于是控制器仍连着旧实例（实测：0 活动、手动选 1，点开始仍切到 0）。
+                // SyncCurrentAdbSelectionToActiveConfig() 是按【配置里的 AdbPath+AdbSerial】匹配的，
+                // 既能用上 pretask 的结果，又不会像 AutoDetectDevice 那样挑"当前活动的模拟器"。
+                var deviceBeforeSync = ViewModel?.CurrentDevice?.ToString();
+                ViewModel?.SyncCurrentAdbSelectionToActiveConfig();
+                var deviceAfterSync = ViewModel?.CurrentDevice?.ToString();
+                LoggerHelper.Info($"pretask 后同步连接目标：{deviceBeforeSync ?? "(空)"} -> {deviceAfterSync ?? "(空)"}");
+            }
+            // LAA: 这里【不要】再调用 AutoDetectDevice。
+            //  · pretask 已经把正确实例的 ADB 写回配置，上面的 ReloadFromDisk() 已把它读进内存；
+            //  · 而 AutoDetectDevice 是按"当前活动的模拟器"选的，会把用户手动选的实例
+            //    覆盖成活动的那个（实测：0 活动、手动选 1，点开始仍会切到 0）；
+            //  · 曾经用"pretask 前后 CurrentDevice 是否变化"当判据，但 pretask 自己就会写回
+            //    配置，该值必然变化，判据无效。
+            // 所以只在完全没有设备时才探测。
+            if (preTaskExecuted && ViewModel?.CurrentController != MaaControllerTypes.PlayCover
+                && string.IsNullOrEmpty(ViewModel?.CurrentDevice?.ToString()))
+            {
+                await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -4668,6 +4683,93 @@ public class MaaProcessor
             case "RestartPC":
                 Instances.RestartSystem();
                 break;
+        }
+
+        // LAA: 「关闭游戏」任务勾了「关闭本程序」时，任务队列跑完由本进程自己退出。
+        // 做法与 MAA 一致：进程内调用 ShutdownApplication，而不是从外部去杀进程。
+        if (ShouldCloseApplicationForCloseGameTask())
+            Instances.ShutdownApplication();
+    }
+
+    /// <summary>
+    /// LAA: 把选项的下标解析成 case 名（找不到返回 null）。
+    /// 用于避免"假定 index 0 就是 Yes"这种顺序依赖。
+    /// </summary>
+    private string? ResolveCaseName(string optionName, int index)
+    {
+        try
+        {
+            if (index < 0) return null;
+            if (Interface?.Option != null
+                && Interface.Option.TryGetValue(optionName, out var opt)
+                && opt?.Cases != null
+                && index < opt.Cases.Count)
+            {
+                return opt.Cases[index]?.Name;
+            }
+        }
+        catch (Exception ex)
+        {
+            LoggerHelper.Warning($"解析选项 case 失败（{optionName}[{index}]）：{ex.Message}");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// LAA: 判断「关闭游戏」任务是否勾选了「关闭本程序」。
+    /// 直接读实例配置文件，避免依赖 InstanceConfiguration 的内部取值 API：
+    ///   TaskItems[] 中 entry == "关闭游戏" 且 default_check == true 的那一项，
+    ///   其 option[] 里 name == "关闭本程序" 的 index。
+    /// </summary>
+    private bool ShouldCloseApplicationForCloseGameTask()
+    {
+        const string CloseGameEntry = "关闭游戏";
+        const string CloseAppOption = "关闭本程序";
+        try
+        {
+            var path = InstanceConfiguration.GetConfigFilePath();
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+                return false;
+
+            var root = Newtonsoft.Json.Linq.JObject.Parse(
+                System.IO.File.ReadAllText(path, System.Text.Encoding.UTF8));
+
+            var items = root[ConfigurationKeys.TaskItems] as Newtonsoft.Json.Linq.JArray;
+            LoggerHelper.Info($"关闭本程序判定：配置文件={path} TaskItems数={(items?.Count ?? -1)}");
+
+            var task = items?
+                .FirstOrDefault(t => (string?)t["entry"] == CloseGameEntry
+                                     && (bool?)t["default_check"] == true);
+            if (task == null)
+            {
+                var names = string.Join(",",
+                    (items ?? new Newtonsoft.Json.Linq.JArray())
+                        .Select(x => $"{(string?)x["entry"]}/{(bool?)x["default_check"]}"));
+                LoggerHelper.Info($"关闭本程序判定：未找到已勾选的「关闭游戏」任务。队列={names}");
+                return false;
+            }
+
+            var option = (task["option"] as Newtonsoft.Json.Linq.JArray)?
+                .FirstOrDefault(o => (string?)o["name"] == CloseAppOption);
+            if (option == null)
+            {
+                var existing = string.Join(", ",
+                    (task["option"] as Newtonsoft.Json.Linq.JArray)?
+                        .Select(o => (string?)o["name"]) ?? Enumerable.Empty<string>());
+                LoggerHelper.Info($"关闭本程序判定：该任务没有「{CloseAppOption}」选项；现有选项={existing}");
+                return false;
+            }
+
+            var index = (int?)option["index"] ?? -1;
+            var effective = ResolveCaseName(CloseAppOption, index);
+            LoggerHelper.Info($"关闭本程序判定：index={index} 对应 case=\"{effective ?? "(未知)"}\"");
+            // 按 case 名判定，避免 cases 顺序被调整后判定反向
+            return string.Equals(effective, "Yes", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            LoggerHelper.Warning($"关闭游戏-关闭本程序 判定失败：{ex.Message}");
+            return false;
         }
     }
 

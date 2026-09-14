@@ -1741,6 +1741,14 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
 
         ChangedDevice(value);
 
+        // LAA: 用户手动选择设备时解除"选择锁"。
+        // 刷新期间会把锁打开（避免被探测到的活动实例覆盖），但用户自己的选择必须能生效，
+        // 所以这里一旦识别出是手动选择（非内部触发/同步）就立刻解锁。
+        if (!_suppressAutoConnect && !_isSyncing && IsSelectableDevice(value))
+        {
+            SetAdbRecoverySelectionLock(false);
+        }
+
         // 仅 ComboBox 手动选中设备时，根据"刷新后尝试连接"设置自动连接
         if (!_suppressAutoConnect
             && !_isSyncing
@@ -2114,7 +2122,30 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         var controllerType = CurrentController;
         TaskManager.RunTask(() =>
             {
-                AutoDetectDevice(_refreshCancellationTokenSource.Token);
+                // LAA: 手动刷新只更新设备列表，不改变当前连接目标。
+                // AutoDetectDevice 是按"当前活动的设备"选的；UpdateDeviceList 里本来就有
+                // 「恢复期间保留当前选中目标不变」的锁，这里在刷新期间把它打开，从根上避免
+                // 把活动的另一个实例设成当前控制器。ADB 一律上锁，刷完再按配置同步回来。
+                var deviceBeforeRefresh = CurrentDevice;
+                var lockSelection = CurrentController == MaaControllerTypes.Adb;
+                if (lockSelection)
+                    SetAdbRecoverySelectionLock(true);
+                try
+                {
+                    AutoDetectDevice(_refreshCancellationTokenSource.Token);
+                }
+                finally
+                {
+                    if (lockSelection)
+                        SetAdbRecoverySelectionLock(false);
+                }
+
+                if (lockSelection)
+                {
+                    SyncCurrentAdbSelectionToActiveConfig();
+                    LoggerHelper.Info($"刷新后连接目标：{deviceBeforeRefresh?.ToString() ?? "(空)"}"
+                                      + $" -> {CurrentDevice?.ToString() ?? "(空)"}（以配置中的设备为准）");
+                }
 
                 // 刷新后自动连接（仅按钮触发的刷新）
                 if (CurrentDevice != null
