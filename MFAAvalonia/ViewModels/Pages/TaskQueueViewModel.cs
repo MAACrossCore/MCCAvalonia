@@ -667,46 +667,20 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     // 任务列表分组：纯显示层的折叠，表头本身没有任何功能，
     // 组内任务与普通任务完全同级、各自独立勾选与执行。
     //
-    // 只在「同一组的成员在队列里连续排列」时才成组；一旦被拖散，
-    // 该组自动退回普通显示，避免出现表头和成员分居两处的诡异画面。
+    // 同一组的成员始终保持连续：落点在组内时调整成员顺序，
+    // 落点在组外时由拖拽层移动整个分组，单个成员不会脱组。
     private readonly Dictionary<string, bool> _taskGroupExpanded = new();
-    // 表头画在哪个成员上。必须是「粘性」的：用户拖的就是这个成员，
-    // 收拢要以它所在的位置为锚点。若每次刷新都重取「当前第一个成员」，
-    // 向下拖拽会被拉回原位（被拖的成员跑到后面，而留在原地的成员成了第一个）。
-    private readonly Dictionary<string, DragItemViewModel> _taskGroupHeaderCarrier = new();
     private bool _refreshingTaskGroups;
     private bool _groupCoalesceScheduled;
 
     private void OnTaskItemsCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        // LAA: 表头拖拽 = 整组移动。被拖的是哪一项，直接从事件里读 —— 这是权威来源。
-        // 之前靠「谁当前排第一」推断载体，渲染与判断会脱节（日志里出现过拖 A 却锚定 B），
-        // 这里改成：谁被拖，谁就成为该组的锚点，整组跟着它落到新位置，组内顺序不变。
-        DragItemViewModel? moved = e.Action switch
-        {
-            System.Collections.Specialized.NotifyCollectionChangedAction.Move
-                when e.NewStartingIndex >= 0 && e.NewStartingIndex < TaskItemViewModels.Count
-                => TaskItemViewModels[e.NewStartingIndex],
-            System.Collections.Specialized.NotifyCollectionChangedAction.Add
-                => e.NewItems?.OfType<DragItemViewModel>().FirstOrDefault(),
-            System.Collections.Specialized.NotifyCollectionChangedAction.Replace
-                => e.NewItems?.OfType<DragItemViewModel>().FirstOrDefault(),
-            _ => null,
-        };
-        // LAA: 表头拖拽 = 整组移动。被拖的是哪一项，直接从事件里读 —— 这是权威来源。
-        // 谁被拖，谁就成为该组的锚点；CoalesceOrder 会在锚点所在位置输出整组，
-        // 于是整组跟着它落到新位置（round 5 定位并验证过：这是"能向下拖"的关键）。
-        if (moved != null && TaskGroupKeyOf(moved) is { } movedKey)
-        {
-            _taskGroupHeaderCarrier[movedKey] = moved;
-        }
-
         RefreshTaskGroups();
         ScheduleGroupCoalesce();
     }
 
     /// <summary>
-    /// LAA: 把同组成员排到一起（保持组内相对顺序，整体落在首个成员的位置）。
+    /// LAA: 把同组成员排到一起（保持当前组内相对顺序，整体落在首个成员的位置）。
     /// 纯函数，只算目标顺序，不改集合。
     /// </summary>
     private List<DragItemViewModel> CoalesceOrder(IReadOnlyList<DragItemViewModel> items)
@@ -722,34 +696,13 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
                 continue;
             }
 
-            var carrier = CarrierOf(key, items);
-            var hasCarrier = carrier != null && items.Contains(carrier);
-
-            // 关键：整组只在「表头载体」出现的位置输出。
-            // 若在首个遇到的成员处输出，向下拖拽时（顺序变成 另一成员, 其它, 载体）
-            // 锚点会落到没被拖动的那个成员上，整组被拉回原位 —— 表现为下拽无效。
-            if (hasCarrier && !ReferenceEquals(item, carrier)) continue;
             if (!emitted.Add(key)) continue;
 
-            if (hasCarrier) result.Add(carrier!);
             foreach (var member in items)
-                if (TaskGroupKeyOf(member) == key && !ReferenceEquals(member, carrier))
+                if (TaskGroupKeyOf(member) == key)
                     result.Add(member);
         }
         return result;
-    }
-
-    /// <summary>LAA: 该组的表头载体落在哪个成员上。</summary>
-    private DragItemViewModel? CarrierOf(string key, IReadOnlyList<DragItemViewModel> items)
-    {
-        if (_taskGroupHeaderCarrier.TryGetValue(key, out var carrier)
-            && carrier != null && items.Contains(carrier) && TaskGroupKeyOf(carrier) == key)
-        {
-            return carrier;
-        }
-        var first = items.FirstOrDefault(m => TaskGroupKeyOf(m) == key);
-        if (first != null) _taskGroupHeaderCarrier[key] = first;
-        return first;
     }
 
     /// <summary>LAA: 延后一次收拢，避免在 CollectionChanged 处理中直接改集合。</summary>
@@ -765,9 +718,8 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// LAA: 组成员被拖散时自动收回一起。
-    /// 分组表头画在组内第一行上，所以「拖表头」等于拖这个成员，
-    /// 收拢后其余成员会跟过来 —— 效果就是整组一起移动。
+    /// LAA: 组成员因配置加载等原因被打散时自动收回一起；
+    /// 拖到组外时由拖拽层改为移动整个分组。
     /// </summary>
     private void ApplyGroupCoalesce()
     {
@@ -862,7 +814,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
 
                 var expanded = !_taskGroupExpanded.TryGetValue(key, out var known) || known;
                 var members = items.GetRange(index, end - index + 1);
-                var carrier = CarrierOf(key, items) ?? members[0];
+                var carrier = members[0];
                 foreach (var member in members)
                 {
                     var isCarrier = ReferenceEquals(member, carrier);
@@ -891,6 +843,37 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         var expanded = !_taskGroupExpanded.TryGetValue(key, out var known) || known;
         _taskGroupExpanded[key] = !expanded;
         RefreshTaskGroups();
+    }
+
+    /// <summary>仅当组内全部任务都处于明确勾选状态时，组级复选框才显示为选中。</summary>
+    public bool IsTaskGroupFullyChecked(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        var members = TaskItemViewModels.Where(item => item.GroupKey == key).ToList();
+        return members.Count > 0 && members.All(item => item.IsCheckedWithNull == true);
+    }
+
+    /// <summary>通过现有任务勾选属性批量选择或取消组内任务，沿用原有配置保存逻辑。</summary>
+    public void SetTaskGroupChecked(string? key, bool isChecked)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        var members = TaskItemViewModels.Where(item => item.GroupKey == key).ToList();
+        foreach (var member in members)
+        {
+            if (member.IsCheckedWithNull != isChecked)
+                member.IsCheckedWithNull = isChecked;
+        }
+
+        NotifyTaskGroupCheckedChanged(key);
+    }
+
+    /// <summary>任一成员变化后刷新该组表头复选框。</summary>
+    public void NotifyTaskGroupCheckedChanged(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+        foreach (var member in TaskItemViewModels.Where(item => item.GroupKey == key))
+            member.NotifyGroupCheckedChanged();
     }
 
     [RelayCommand]

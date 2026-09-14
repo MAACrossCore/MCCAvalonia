@@ -70,7 +70,11 @@ public partial class DragItemViewModel : ObservableObject
     // 这样完全不改变 TaskItemViewModels 的构成，也就不必去动那 60+ 处
     // 按 IsResourceOptionItem 过滤的逻辑（漏改一处就可能把 null 存进配置）。
     // 分组来源：interface.json 顶层的 group 定义 + 各任务自己的 group 字段。
-    [ObservableProperty] [JsonIgnore] private string? _groupKey;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInTaskGroup))]
+    [NotifyPropertyChangedFor(nameof(IsGroupChecked))]
+    [JsonIgnore]
+    private string? _groupKey;
     [ObservableProperty] [JsonIgnore] private string? _groupLabel;
     [ObservableProperty] [JsonIgnore] private bool _hasGroupHeader;
     [ObservableProperty] [JsonIgnore] private bool _isGroupExpanded = true;
@@ -78,6 +82,22 @@ public partial class DragItemViewModel : ObservableObject
     // 折叠时「首成员」那一行要保留表头、只藏任务内容，
     // 所以不能复用 IsHiddenByGroup（首成员永远是 false），需要单独一个标记。
     [ObservableProperty] [JsonIgnore] private bool _isTaskContentHidden;
+
+    [JsonIgnore]
+    public bool IsInTaskGroup => !string.IsNullOrWhiteSpace(GroupKey);
+
+    /// <summary>
+    /// 分组表头复选框仅在组内每个任务都明确勾选时显示为选中。
+    /// 该状态由现有任务勾选值实时派生，不额外写入配置。
+    /// </summary>
+    [JsonIgnore]
+    public bool IsGroupChecked
+    {
+        get => OwnerViewModel?.IsTaskGroupFullyChecked(GroupKey) == true;
+        set => OwnerViewModel?.SetTaskGroupChecked(GroupKey, value);
+    }
+
+    internal void NotifyGroupCheckedChanged() => OnPropertyChanged(nameof(IsGroupChecked));
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsRunStatusVisible))]
@@ -154,6 +174,8 @@ public partial class DragItemViewModel : ObservableObject
                 (OwnerViewModel?.Processor.InstanceConfiguration ?? ConfigurationManager.CurrentInstance).SetValue(ConfigurationKeys.TaskItems,
                     (OwnerViewModel ?? Instances.InstanceTabBarViewModel.ActiveTab?.TaskQueueViewModel)?.TaskItemViewModels.Where(m => !m.IsResourceOptionItem).Select(model => model.InterfaceItem).ToList());
             }
+
+            OwnerViewModel?.NotifyTaskGroupCheckedChanged(GroupKey);
         }
     }
 

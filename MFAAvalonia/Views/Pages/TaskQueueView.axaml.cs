@@ -884,6 +884,21 @@ public partial class TaskQueueView : UserControl
         e.Handled = true;
     }
 
+    /// <summary>
+    /// MCC: 组级复选框使用显式点击处理，确保一次点击就同步组内全部任务，
+    /// 不依赖计算属性的双向绑定回写时序。
+    /// </summary>
+    private void TaskGroupCheckBox_OnClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox { DataContext: DragItemViewModel item } checkBox
+            && !string.IsNullOrEmpty(item.GroupKey)
+            && DataContext is TaskQueueViewModel vm)
+        {
+            vm.SetTaskGroupChecked(item.GroupKey, checkBox.IsChecked == true);
+        }
+        e.Handled = true;
+    }
+
     private async void OpenChipFilterPlanWindow()
     {
         if (_chipFilterPlanWindowOpen)

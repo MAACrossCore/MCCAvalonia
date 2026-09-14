@@ -32,6 +32,8 @@
         <pages:TaskQueueViewModel />
     </Design.DataContext>
     <UserControl.Resources>
+        <!-- MCC: 周常标题与组内任务共用同一背景色。 -->
+        <SolidColorBrush x:Key="TaskGroupBackgroundBrush" Color="#16808080" />
         <ContextMenu x:Key="TaskMenu"
                      Opening="TaskMenu_OnOpening">
             <MenuItem x:Name="TaskMenuRunSingle"
@@ -90,6 +92,9 @@
         </ContextMenu>
     </UserControl.Resources>
     <UserControl.Styles>
+        <Style Selector="Border.TaskGroupRow">
+            <Setter Property="Background" Value="{StaticResource TaskGroupBackgroundBrush}" />
+        </Style>
         <Style Selector="Path.TaskRunSpinner">
             <Setter Property="RenderTransformOrigin" Value="50%,50%" />
             <Setter Property="RenderTransform">
@@ -1215,13 +1220,22 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel>
-                                <!-- LAA: 分组表头（纯显示，无功能）。画在组内第一行顶部；折叠时该行内容一起隐藏。 -->
+                                <!-- MCC: 分组表头画在组内第一行顶部，包含批量勾选与折叠操作。 -->
                                 <Border IsVisible="{Binding HasGroupHeader}"
-                                        Background="#16808080"
+                                        Background="{StaticResource TaskGroupBackgroundBrush}"
                                         CornerRadius="6"
                                         Margin="0,5,0,5"
-                                        Padding="4,1">
-                                    <Button Background="Transparent"
+                                        Padding="0,1">
+                                    <Grid ColumnDefinitions="Auto,*">
+                                    <CheckBox Grid.Column="0"
+                                              MinWidth="0"
+                                              Margin="0,0,8,0"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              IsChecked="{Binding IsGroupChecked, Mode=OneWay}"
+                                              Click="TaskGroupCheckBox_OnClick" />
+                                    <Button Grid.Column="1"
+                                            Background="Transparent"
                                             BorderThickness="0"
                                             Padding="2,3"
                                             MinWidth="0"
@@ -1247,8 +1261,12 @@
                                                        VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Button>
+                                    </Grid>
                                 </Border>
-                                <Panel IsVisible="{Binding !IsTaskContentHidden}">
+                                <Border IsVisible="{Binding !IsTaskContentHidden}"
+                                        Classes.TaskGroupRow="{Binding IsInTaskGroup}"
+                                        CornerRadius="6">
+                                <Panel>
                                 <Border BorderBrush="#E85D75" BorderThickness="1" CornerRadius="8"
                                         Margin="-2" Padding="2"
                                         IsVisible="{Binding HasValidationError}" IsHitTestVisible="False"/>
@@ -1353,6 +1371,7 @@
                                     </Grid>
                                 </Grid>
                                 </Panel>
+                                </Border>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

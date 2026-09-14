@@ -439,7 +439,15 @@ public class DragDropExtensions
 
         if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex != targetIndex)
         {
-            if (GetEnableAnimation(listBox))
+            if (items[sourceIndex] is Helper.ValueType.DragItemViewModel groupedSource
+                && !string.IsNullOrWhiteSpace(groupedSource.GroupKey)
+                && TryGetGroupBounds(items, groupedSource.GroupKey, out var groupStart, out var groupEnd)
+                && (targetIndex < groupStart || targetIndex > groupEnd + 1))
+            {
+                // 组内落点调整单项；组外落点移动整组，成员永远不会脱离分组。
+                MoveGroupTo(items, groupedSource.GroupKey, targetIndex);
+            }
+            else if (GetEnableAnimation(listBox))
             {
                 _ = MoveWithAnimation(listBox, items, sourceIndex, targetIndex);
             }
@@ -452,7 +460,7 @@ public class DragDropExtensions
     }
 
     /// <summary>
-    /// 检查拖放操作是否有效（资源预设配置项不能被移动，也不能移动到资源预设配置项的位置）
+    /// 检查拖放操作是否有效（资源预设配置项不能被移动，也不能移动到资源预设配置项的位置）。
     /// </summary>
     private static bool IsValidDragDropOperation(IList items, int sourceIndex, int targetIndex)
     {
@@ -468,6 +476,54 @@ public class DragDropExtensions
             return false;
 
         return true;
+    }
+
+    private static bool TryGetGroupBounds(IList items, string groupKey, out int groupStart, out int groupEnd)
+    {
+        groupStart = -1;
+        groupEnd = -1;
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (items[index] is not Helper.ValueType.DragItemViewModel candidate
+                || candidate.GroupKey != groupKey)
+                continue;
+
+            if (groupStart < 0) groupStart = index;
+            groupEnd = index;
+        }
+
+        return groupStart >= 0;
+    }
+
+    /// <summary>
+    /// 将分组作为整体移动到原列表的指定插入槽，保持组内相对顺序。
+    /// </summary>
+    private static void MoveGroupTo(IList items, string groupKey, int targetIndex)
+    {
+        var memberIndexes = new List<int>();
+        var members = new List<object>();
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (items[index] is not Helper.ValueType.DragItemViewModel candidate
+                || candidate.GroupKey != groupKey)
+                continue;
+
+            memberIndexes.Add(index);
+            members.Add(candidate);
+        }
+
+        if (members.Count == 0) return;
+
+        // 删除组成员后，原插入槽要扣除位于它之前的成员数量。
+        var removedBeforeTarget = memberIndexes.Count(index => index < targetIndex);
+        var insertIndex = Math.Clamp(targetIndex - removedBeforeTarget, 0, items.Count - members.Count);
+
+        for (var index = memberIndexes.Count - 1; index >= 0; index--)
+            items.RemoveAt(memberIndexes[index]);
+
+        insertIndex = Math.Clamp(insertIndex, 0, items.Count);
+        for (var index = 0; index < members.Count; index++)
+            items.Insert(insertIndex + index, members[index]);
     }
 
 
