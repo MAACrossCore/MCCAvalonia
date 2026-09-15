@@ -292,29 +292,31 @@ public static class AgentHelper
 
         IMaaAgentClient.AgentServerStartupMethod method = (s, directory) =>
         {
-            ctx.Process = System.Diagnostics.Process.Start(startInfo);
-            if (ctx.Process == null)
+            var process = System.Diagnostics.Process.Start(startInfo);
+            ctx.Process = process;
+            if (process == null)
                 LoggerHelper.Error("Agent 启动失败。");
             else
             {
-                ctx.Process.Exited += (_, _) =>
+                process.Exited += (_, _) =>
                 {
                     LoggerHelper.Info("Agent 进程已退出。");
                     StopReadStreams(ctx);
-                    ctx.Process = null;
+                    if (ReferenceEquals(ctx.Process, process))
+                        ctx.Process = null;
                 };
 
                 BindProcessLifetime(ctx);
 
                 var readToken = ResetReadCancellation(ctx).Token;
-                TaskManager.RunTaskAsync(() => ReadProcessStreamAsync(ctx.Process.StandardOutput.BaseStream,
+                TaskManager.RunTaskAsync(() => ReadProcessStreamAsync(process.StandardOutput.BaseStream,
                     line => HandleOutputLine(line, processor, "Stdout"), readToken), token: readToken, noMessage: true);
-                TaskManager.RunTaskAsync(() => ReadProcessStreamAsync(ctx.Process.StandardError.BaseStream,
+                TaskManager.RunTaskAsync(() => ReadProcessStreamAsync(process.StandardError.BaseStream,
                     line => HandleOutputLine(line, processor, "StdErr"), readToken), token: readToken, noMessage: true);
 
-                TaskManager.RunTaskAsync(async () => await ctx.Process.WaitForExitAsync(token), token: token, name: "Agent程序启动");
+                TaskManager.RunTaskAsync(async () => await process.WaitForExitAsync(token), token: token, name: "Agent程序启动");
             }
-            return ctx.Process;
+            return process;
         };
 
         // 重连逻辑

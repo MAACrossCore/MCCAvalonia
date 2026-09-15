@@ -1650,22 +1650,9 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
             _suppressDeviceSelectionToast = true;
             try
             {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    _suppressAutoConnect = true;
-                    _suppressDeviceSelectionToast = true;
-                    try
-                    {
-                        CurrentDevice = matchedDevice;
-                        OnPropertyChanged(nameof(CurrentDevice));
-                        OnPropertyChanged(nameof(CurrentDeviceTooltipText));
-                    }
-                    finally
-                    {
-                        _suppressDeviceSelectionToast = false;
-                        _suppressAutoConnect = false;
-                    }
-                }, DispatcherPriority.Background);
+                CurrentDevice = matchedDevice;
+                OnPropertyChanged(nameof(CurrentDevice));
+                OnPropertyChanged(nameof(CurrentDeviceTooltipText));
             }
             finally
             {
@@ -1690,8 +1677,25 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty] private bool _isConnected;
 
+    private DateTime? _liveViewConnectedAtUtc;
+    private int _liveViewConsecutiveEmptyFrames;
+    private static readonly TimeSpan LiveViewNoImageGracePeriod = TimeSpan.FromSeconds(5);
+    private const int LiveViewNoImageConsecutiveThreshold = 3;
+
     public void SetConnected(bool connected)
     {
+        if (connected && !IsConnected)
+        {
+            _liveViewConnectedAtUtc = DateTime.UtcNow;
+            _liveViewConsecutiveEmptyFrames = 0;
+            _liveViewNoImageLogged = false;
+        }
+        else if (!connected)
+        {
+            _liveViewConnectedAtUtc = null;
+            _liveViewConsecutiveEmptyFrames = 0;
+            _liveViewNoImageLogged = false;
+        }
         IsConnected = connected;
     }
 
@@ -3587,7 +3591,13 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
                 var buffer = Processor.GetLiveViewBuffer(false);
                 if (buffer == null)
                 {
-                    if (!_liveViewNoImageLogged)
+                    _liveViewConsecutiveEmptyFrames++;
+                    _liveViewConnectedAtUtc ??= DateTime.UtcNow;
+                    var gracePeriodElapsed = DateTime.UtcNow - _liveViewConnectedAtUtc.Value
+                                             >= LiveViewNoImageGracePeriod;
+                    if (!_liveViewNoImageLogged
+                        && gracePeriodElapsed
+                        && _liveViewConsecutiveEmptyFrames >= LiveViewNoImageConsecutiveThreshold)
                     {
                         _liveViewNoImageLogged = true;
                         var screencapType = Processor.ScreenshotType();
@@ -3601,6 +3611,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
                 }
                 else
                 {
+                    _liveViewConsecutiveEmptyFrames = 0;
                     _liveViewNoImageLogged = false;
                     _ = UpdateLiveViewImageAsync(buffer);
                 }

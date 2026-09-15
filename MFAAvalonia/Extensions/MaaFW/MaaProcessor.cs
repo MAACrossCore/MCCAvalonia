@@ -1666,6 +1666,16 @@ public class MaaProcessor
                 if (MaaProcessorManager.Instance.Current.InstanceId == InstanceId)
                     await Instances.ReloadConfigurationForSwitchAsync(refreshTask: false);
 
+                // pretask 写入的是实例 JSON，而 MaaFWConfiguration 是运行期对象，不会随
+                // ReloadFromDisk 自动更新。先从刚刷新的实例配置恢复设备，触发 ChangedDevice
+                // 把 ADB 路径、序列号和截图方式同步进 Config，再初始化控制器。
+                ViewModel?.TryReadAdbDeviceFromConfig(
+                    inTask: false,
+                    refresh: false,
+                    allowAutoDetect: false,
+                    showToast: false,
+                    strictLaunchTarget: false);
+
                 // LAA: 把「连接目标」同步成配置里刚写回的 ADB。
                 // pretask 会按用户选的 MuMu 实例改写配置里的 ADB；但 CurrentDevice 不会被
                 // ReloadFromDisk 更新，于是控制器仍连着旧实例（实测：0 活动、手动选 1，点开始仍切到 0）。
@@ -1673,6 +1683,12 @@ public class MaaProcessor
                 // 既能用上 pretask 的结果，又不会像 AutoDetectDevice 那样挑"当前活动的模拟器"。
                 var deviceBeforeSync = ViewModel?.CurrentDevice?.ToString();
                 ViewModel?.SyncCurrentAdbSelectionToActiveConfig();
+                if (ViewModel?.CurrentController != MaaControllerTypes.PlayCover
+                    && string.IsNullOrEmpty(ViewModel?.CurrentDevice?.ToString()))
+                {
+                    await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
+                    ViewModel.SyncCurrentAdbSelectionToActiveConfig();
+                }
                 var deviceAfterSync = ViewModel?.CurrentDevice?.ToString();
                 LoggerHelper.Info($"pretask 后同步连接目标：{deviceBeforeSync ?? "(空)"} -> {deviceAfterSync ?? "(空)"}");
             }
@@ -1683,11 +1699,7 @@ public class MaaProcessor
             //  · 曾经用"pretask 前后 CurrentDevice 是否变化"当判据，但 pretask 自己就会写回
             //    配置，该值必然变化，判据无效。
             // 所以只在完全没有设备时才探测。
-            if (preTaskExecuted && ViewModel?.CurrentController != MaaControllerTypes.PlayCover
-                && string.IsNullOrEmpty(ViewModel?.CurrentDevice?.ToString()))
-            {
-                await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
-            }
+            // 设备刷新和目标同步已在 pretask 分支内完成，控制器初始化不会再读到空 ADB。
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -4223,6 +4235,15 @@ public class MaaProcessor
         if (!InstanceConfiguration.GetValue(ConfigurationKeys.RetryOnDisconnected, false))
             return;
 
+        // 项目的 pretask 会负责启动模拟器并把最终 ADB 写回配置。若在这里先走通用的
+        // “连接失败后启动软件”路径，会在尚未真正连接时错误显示“连接失败”，还会重复
+        // 启动 MuMuManager。让 InitializeMaaTasker 中的 pretask 成为唯一启动入口。
+        if (HasApplicablePreTask())
+        {
+            LoggerHelper.Info("ADB 目标尚未就绪，将由项目 pretask 启动模拟器并配置连接目标。");
+            return;
+        }
+
         if (!CanStartSoftware(out var reason))
         {
             LoggerHelper.Warning($"连接前跳过自动启动模拟器：{reason}");
@@ -4235,6 +4256,19 @@ public class MaaProcessor
             if (InstanceConfiguration.GetValue(ConfigurationKeys.AutoDetectOnConnectionFailed, true))
                 ViewModel.TryReadAdbDeviceFromConfig(false, true, true, false, true);
         });
+    }
+
+    private bool HasApplicablePreTask()
+    {
+        var controllerName = MaaInterfaceActivationHelper.ResolveControllerName(
+            Interface, ViewModel?.CurrentController ?? MaaControllerTypes.None)
+            ?? ViewModel?.CurrentController.ToJsonKey();
+        var resourceName = ViewModel?.CurrentResource;
+        return Interface?.PreTask?.Any(preTask =>
+            (preTask.Controller is not { Count: > 0 }
+             || preTask.Controller.Any(name => string.Equals(name, controllerName, StringComparison.OrdinalIgnoreCase)))
+            && (preTask.Resource is not { Count: > 0 }
+                || preTask.Resource.Any(name => string.Equals(name, resourceName, StringComparison.OrdinalIgnoreCase)))) == true;
     }
 
     async private Task<bool> HandleAdbConnectionAsync(CancellationToken token, bool showMessage = true)
@@ -4915,25 +4949,36 @@ public class MaaProcessor
         // 检查当前控制器是否需要管理员权限
         var requiresAdmin = ShouldStartWithAdminPrivileges();
 
+        var emulatorArguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
+        var isCommandStyleLauncher = OperatingSystem.IsWindows()
+                                     && !string.IsNullOrWhiteSpace(emulatorArguments)
+                                     && (processName.Contains("Manager", StringComparison.OrdinalIgnoreCase)
+                                         || processName.Contains("Console", StringComparison.OrdinalIgnoreCase));
         var startInfo = new ProcessStartInfo
         {
             FileName = exePath,
-            UseShellExecute = true,
-            CreateNoWindow = false
+            UseShellExecute = !isCommandStyleLauncher,
+            CreateNoWindow = isCommandStyleLauncher,
+            WindowStyle = isCommandStyleLauncher ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal
         };
 
         // 如果需要管理员权限且当前不是管理员，使用 runas 启动
         if (requiresAdmin && OperatingSystem.IsWindows() && !AdminHelper.IsRunningAsAdministrator())
         {
+            // ShellExecute is required for the runas verb. In this exceptional path Windows
+            // owns the launch UI, so the command-style no-window optimization cannot apply.
+            startInfo.UseShellExecute = true;
+            startInfo.CreateNoWindow = false;
+            startInfo.WindowStyle = ProcessWindowStyle.Normal;
             startInfo.Verb = "runas";
             LoggerHelper.Info("以管理员权限启动软件");
         }
 
         if (Process.GetProcessesByName(processName).Length == 0)
         {
-            if (!string.IsNullOrWhiteSpace(InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty)))
+            if (!string.IsNullOrWhiteSpace(emulatorArguments))
             {
-                startInfo.Arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
+                startInfo.Arguments = emulatorArguments;
                 _softwareProcess =
                     Process.Start(startInfo);
             }
@@ -4942,9 +4987,9 @@ public class MaaProcessor
         }
         else
         {
-            if (!string.IsNullOrWhiteSpace(InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty)))
+            if (!string.IsNullOrWhiteSpace(emulatorArguments))
             {
-                startInfo.Arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
+                startInfo.Arguments = emulatorArguments;
                 _softwareProcess = Process.Start(startInfo);
             }
             else
