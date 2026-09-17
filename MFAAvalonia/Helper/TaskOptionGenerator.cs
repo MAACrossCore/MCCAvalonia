@@ -877,6 +877,11 @@ public class TaskOptionGenerator(TaskQueueViewModel viewModel, Action saveConfig
             labelPanel.Children.Insert(0, icon);
         }
 
+        // Input labels can be considerably longer than ordinary option names.
+        // Constrain the text to the label column so it wraps instead of being
+        // measured past the TextBox and visually overlapping it.
+        EnableLabelWrapping(labelPanel);
+
         Grid.SetColumn(labelPanel, 0);
         Grid.SetColumn(textBox, 1);
         
@@ -886,6 +891,30 @@ public class TaskOptionGenerator(TaskQueueViewModel viewModel, Action saveConfig
         grid.Children.Add(textBox);
 
         return grid;
+    }
+
+    private static void EnableLabelWrapping(StackPanel labelPanel)
+    {
+        labelPanel.MinWidth = 0;
+        labelPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+
+        var textBlocks = labelPanel.Children.OfType<TextBlock>().ToList();
+        foreach (var textBlock in textBlocks)
+        {
+            textBlock.TextWrapping = TextWrapping.Wrap;
+            textBlock.TextTrimming = TextTrimming.None;
+        }
+
+        labelPanel.SizeChanged += (_, _) =>
+        {
+            var reservedWidth = labelPanel.Children
+                .Where(child => child is not TextBlock && child.IsVisible)
+                .Sum(child => child.DesiredSize.Width);
+            var textWidth = Math.Max(0, labelPanel.Bounds.Width - reservedWidth);
+
+            foreach (var textBlock in textBlocks)
+                textBlock.MaxWidth = textWidth;
+        };
     }
 
     private Control CreateBoolInputControl(
