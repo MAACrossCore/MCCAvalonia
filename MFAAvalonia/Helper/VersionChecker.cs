@@ -781,9 +781,10 @@ public static class VersionChecker
             catch (Exception ex)
             {
                 Dismiss(sukiToast);
-                ToastHelper.Warn($"{LangKeys.FailToGetLatestVersionInfo.ToLocalization()}", ex.Message, -1);
+                if (!noDialog)
+                    ToastHelper.Warn($"{LangKeys.FailToGetLatestVersionInfo.ToLocalization()}", ex.Message, -1);
                 Instances.RootViewModel.SetUpdating(false);
-                LoggerHelper.Error($"获取资源包下载信息失败：来源={(isGithub ? "GitHub" : "Mirror")}，本地版本={localVersion}，原因={ex.Message}", ex);
+                LoggerHelper.Warning($"暂时无法检查资源更新：来源={(isGithub ? "GitHub" : "Mirror")}，本地版本={localVersion}，原因={ex.Message}");
                 return;
             }
         }
@@ -793,7 +794,8 @@ public static class VersionChecker
         if (string.IsNullOrWhiteSpace(latestVersion))
         {
             Dismiss(sukiToast);
-            ToastHelper.Warn(LangKeys.FailToGetLatestVersionInfo.ToLocalization());
+            if (!noDialog)
+                ToastHelper.Warn(LangKeys.FailToGetLatestVersionInfo.ToLocalization());
             Instances.RootViewModel.SetUpdating(false);
             Instances.InstanceTabBarViewModel.ActiveTab?.TaskQueueViewModel.ClearDownloadProgress();
             return;
@@ -2544,8 +2546,6 @@ public static class VersionChecker
             return (url, latestVersion, sha256);
 
         var releaseUrl = $"https://api.github.com/repos/{owner}/{repo}/releases";
-        int page = 1;
-        const int perPage = 30;
         using var httpClient = CreateHttpClientWithProxy();
 
         if (!string.IsNullOrWhiteSpace(Instances.VersionUpdateSettingsUserControlModel.GitHubToken))
@@ -2558,99 +2558,57 @@ public static class VersionChecker
         httpClient.DefaultRequestHeaders.UserAgent.TryParseAdd("request");
         httpClient.DefaultRequestHeaders.Accept.TryParseAdd("application/json");
 
-        // 用于存储找到的最佳版本
+        // Stable releases and explicit tags need only one request; release assets are in that response.
+        var singleRelease = !string.IsNullOrWhiteSpace(targetVersion) || versionType == VersionType.Stable;
+        var page = 1;
         JToken? bestRelease = null;
-        string bestVersion = string.Empty;
-
-        while (page < 101)
+        while (page <= 3)
         {
-            var urlWithParams = $"{releaseUrl}?per_page={perPage}&page={page}";
+            var requestUrl = !string.IsNullOrWhiteSpace(targetVersion)
+                ? $"{releaseUrl}/tags/{Uri.EscapeDataString(targetVersion)}"
+                : versionType == VersionType.Stable
+                    ? $"{releaseUrl}/latest"
+                    : $"{releaseUrl}?per_page=30&page={page}";
             try
             {
-                var response = await httpClient.GetAsync(urlWithParams).ConfigureAwait(false);
-                if (response.IsSuccessStatusCode)
+                using var response = await httpClient.GetAsync(requestUrl).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
                 {
-                    string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    var tags = JArray.Parse(json);
-                    if (tags.Count == 0)
-                    {
-                        break;
-                    }
-                    foreach (var tag in tags)
-                    {
-                        // 检查是否为预发布版本
-                        if ((bool)tag["prerelease"] && versionType == VersionType.Stable)
-                        {
-                            continue;
-                        }
-
-                        var tagVersion = tag["tag_name"]?.ToString() ?? string.Empty;
-                        if (string.IsNullOrEmpty(tagVersion)) continue;
-                        // 检查版本类型是否符合更新渠道
-                        var isAlpha = tagVersion.Contains("alpha", StringComparison.OrdinalIgnoreCase);
-                        var isBeta = tagVersion.Contains("beta", StringComparison.OrdinalIgnoreCase);
-
-                        // Alpha渠道：接受所有版本（alpha、beta、stable）
-                        // Beta渠道：接受beta和stable版本，不接受alpha
-                        // Stable渠道：只接受stable版本，不接受alpha和beta
-                        if (isAlpha && versionType != VersionType.Alpha)
-                        {
-                            continue;
-                        }
-                        if (isBeta && versionType == VersionType.Stable)
-                        {
-                            continue;
-                        }
-
-                        // 如果指定了目标版本，直接查找该版本
-                        if (!string.IsNullOrEmpty(targetVersion) && tagVersion.Trim().Equals(targetVersion.Trim(), StringComparison.OrdinalIgnoreCase))
-                        {
-                            latestVersion = tagVersion;
-                            if (IsNewVersionAvailable(latestVersion, currentVersion))
-                            {
-                                if (onlyCheck && repo != "MFAAvalonia")
-                                    SaveRelease(tag, "body");
-                                if (!onlyCheck && repo != "MFAAvalonia")
-                                    SaveChangelog(tag, "body");
-                            }
-                            (url, sha256) = await GetDownloadUrlFromGitHubReleaseAsync(latestVersion, owner, repo).ConfigureAwait(false);
-                            return (url, latestVersion, sha256);
-                        }
-
-                        // 比较版本，找到符合条件的最新版本
-                        if (string.IsNullOrEmpty(targetVersion))
-                        {
-                            if (string.IsNullOrEmpty(bestVersion) || IsNewVersionAvailable(tagVersion, bestVersion))
-                            {
-                                bestVersion = tagVersion;
-                                bestRelease = tag;
-                            }
-                        }
-                    }
+                    throw new HttpRequestException(
+                        $"请求 GitHub 失败：状态码={(int)response.StatusCode} {response.StatusCode}，原因={response.ReasonPhrase}");
                 }
-                else if (response.StatusCode == HttpStatusCode.Forbidden && response.ReasonPhrase?.Contains("403") == true)
+
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (singleRelease)
                 {
-                    LoggerHelper.Error("GitHub API 速率限制已超出，请稍后再试。");
-                    throw new Exception("GitHub API速率限制已超出，请稍后再试。");
+                    bestRelease = JObject.Parse(json);
+                    break;
                 }
-                else
+
+                var releases = JArray.Parse(json);
+                foreach (var release in releases)
                 {
-                    LoggerHelper.Error($"请求 GitHub 失败：状态码={(int)response.StatusCode} {response.StatusCode}，原因={response.ReasonPhrase}");
-                    throw new Exception($"请求 GitHub 失败：状态码={(int)response.StatusCode} {response.StatusCode}，原因={response.ReasonPhrase}");
+                    var tagVersion = release["tag_name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(tagVersion)
+                        || (versionType != VersionType.Alpha && tagVersion.Contains("alpha", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    if (bestRelease == null || IsNewVersionAvailable(tagVersion, bestRelease["tag_name"]?.ToString() ?? string.Empty))
+                        bestRelease = release;
                 }
+                if (bestRelease != null || releases.Count == 0)
+                    break;
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 LoggerHelper.Error($"处理 GitHub 响应失败：原因={e.Message}", e);
-                throw new Exception($"处理 GitHub 响应失败：原因={e.Message}");
+                throw;
             }
             page++;
         }
 
-        // 如果找到了最佳版本，返回它
-        if (!string.IsNullOrEmpty(bestVersion) && bestRelease != null)
+        if (bestRelease != null)
         {
-            latestVersion = bestVersion;
+            latestVersion = bestRelease["tag_name"]?.ToString() ?? string.Empty;
             if (IsNewVersionAvailable(latestVersion, currentVersion))
             {
                 if (onlyCheck && repo != "MFAAvalonia")
@@ -2658,7 +2616,7 @@ public static class VersionChecker
                 if (!onlyCheck && repo != "MFAAvalonia")
                     SaveChangelog(bestRelease, "body");
             }
-            (url, sha256) = await GetDownloadUrlFromGitHubReleaseAsync(latestVersion, owner, repo).ConfigureAwait(false);
+            (url, sha256) = GetDownloadUrlFromGitHubRelease(bestRelease);
         }
         return (url, latestVersion, sha256);
     }
@@ -2853,7 +2811,7 @@ public static class VersionChecker
         return $@"\b{osOrFamily}-{arch}\b";
     }
 
-    private static async Task<(string downloadUrl, string sha256)> GetDownloadUrlFromGitHubReleaseAsync(string version, string owner, string repo)
+    private static (string downloadUrl, string sha256) GetDownloadUrlFromGitHubRelease(JToken releaseData)
     {
         string downloadUrl = string.Empty;
         string sha256 = string.Empty;
@@ -2862,68 +2820,33 @@ public static class VersionChecker
         var cpuArch = GetNormalizedArchitecture();
         LoggerHelper.Info($"目标系统：平台={osPlatform}，系统家族={osFamily}，架构={cpuArch}");
 
-        var releaseUrl = $"https://api.github.com/repos/{owner}/{repo}/releases/tags/{version}";
-        using var httpClient = CreateHttpClientWithProxy();
-        httpClient.DefaultRequestHeaders.UserAgent.TryParseAdd("MFAComponentUpdater/1.0");
-        httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-
-        if (!string.IsNullOrWhiteSpace(Instances.VersionUpdateSettingsUserControlModel.GitHubToken))
+        if (releaseData["assets"] is JArray { Count: > 0 } assets)
         {
-            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-                "Bearer",
-                Instances.VersionUpdateSettingsUserControlModel.GitHubToken);
-        }
-
-        try
-        {
-            var response = await httpClient.GetAsync(releaseUrl).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
-            {
-                var jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var releaseData = JObject.Parse(jsonResponse);
-
-                if (releaseData["assets"] is JArray { Count: > 0 } assets)
+            var orderedAssets = assets
+                .Select(asset => new
                 {
-                    var orderedAssets = assets
-                        .Select(asset => new
-                        {
-                            // The API asset URL supports authenticated downloads for private repositories.
-                            // Keep browser_download_url as a fallback for older/non-standard API responses.
-                            Url = asset["url"]?.ToString() ?? asset["browser_download_url"]?.ToString(),
-                            Name = asset["name"]?.ToString().ToLower(),
-                            Sha256 = ExtractSha256FromDigest(asset["digest"]?.ToString())
-                        })
-                        // 使用新的优先级计算方法（传入系统家族）
-                        .OrderByDescending(a => GetAssetPriority(a.Name, osPlatform, osFamily, cpuArch))
-                        .ToList();
+                    // The API asset URL supports authenticated downloads for private repositories.
+                    Url = asset["url"]?.ToString() ?? asset["browser_download_url"]?.ToString(),
+                    Name = asset["name"]?.ToString().ToLower(),
+                    Sha256 = ExtractSha256FromDigest(asset["digest"]?.ToString())
+                })
+                .OrderByDescending(a => GetAssetPriority(a.Name, osPlatform, osFamily, cpuArch))
+                .ToList();
 
-                    // 输出调试日志（查看每个资产的优先级）
-                    foreach (var asset in orderedAssets)
-                    {
-                        int priority = GetAssetPriority(asset.Name, osPlatform, osFamily, cpuArch);
-                        LoggerHelper.Info($"候选资产优先级：名称={asset.Name}，优先级={priority}");
-                    }
-
-                    var bestAsset = OperatingSystem.IsAndroid()
-                        ? orderedAssets.FirstOrDefault(a =>
-                            a.Url != null
-                            && a.Name?.EndsWith(".apk", StringComparison.OrdinalIgnoreCase) == true
-                            && GetAssetPriority(a.Name, osPlatform, osFamily, cpuArch) > 0)
-                        : orderedAssets.FirstOrDefault(a => a.Url != null);
-                    downloadUrl = bestAsset?.Url ?? string.Empty;
-                    sha256 = bestAsset?.Sha256 ?? string.Empty;
-                }
-            }
-            else
+            foreach (var asset in orderedAssets)
             {
-                LoggerHelper.Error($"请求 GitHub 失败：状态码={(int)response.StatusCode} {response.StatusCode}，原因={response.ReasonPhrase}");
-                throw new Exception($"{response.StatusCode} - {response.ReasonPhrase}");
+                int priority = GetAssetPriority(asset.Name, osPlatform, osFamily, cpuArch);
+                LoggerHelper.Info($"候选资产优先级：名称={asset.Name}，优先级={priority}");
             }
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            LoggerHelper.Error($"处理 GitHub 响应失败：原因={e.Message}", e);
-            throw;
+
+            var bestAsset = OperatingSystem.IsAndroid()
+                ? orderedAssets.FirstOrDefault(a =>
+                    a.Url != null
+                    && a.Name?.EndsWith(".apk", StringComparison.OrdinalIgnoreCase) == true
+                    && GetAssetPriority(a.Name, osPlatform, osFamily, cpuArch) > 0)
+                : orderedAssets.FirstOrDefault(a => a.Url != null);
+            downloadUrl = bestAsset?.Url ?? string.Empty;
+            sha256 = bestAsset?.Sha256 ?? string.Empty;
         }
         return (downloadUrl, sha256);
     }
