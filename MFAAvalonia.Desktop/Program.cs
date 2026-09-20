@@ -60,8 +60,6 @@ sealed class Program
             if (!AppRuntime.IsNewInstance)
                 _ = AppRuntime.TryRecoverUnresponsiveInstance();
 
-            CheckSkiaAvailability();
-
             if (IsRunningInTemp())
             {
                 App.IsTempDirMode = true;
@@ -78,6 +76,7 @@ sealed class Program
             PrivatePathHelper.CleanupDuplicateLibraries(AppContext.BaseDirectory, AppContext.GetData("SubdirectoriesToProbe") as string);
             PrivatePathHelper.SetupNativeLibraryResolver();
 #endif
+            CheckSkiaAvailability();
 
             List<string> resultDirectories = new();
 
@@ -216,9 +215,7 @@ sealed class Program
     {
         try
         {
-            // 尝试访问 SkiaSharp 类型以触发潜在的 DllNotFoundException
-            // Accessing static property might trigger type initializer
-            var test = SkiaSharp.SKImageInfo.Empty;
+            using var bitmap = new SkiaSharp.SKBitmap(1, 1);
         }
         catch (Exception e)
         {

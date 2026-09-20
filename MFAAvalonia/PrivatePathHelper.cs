@@ -17,6 +17,8 @@ public static class PrivatePathHelper
     private static readonly object _resolverLock = new();
     private static bool _managedResolverRegistered;
     private static bool _nativeResolverRegistered;
+    private static bool _skiaResolverRegistered;
+    private static IntPtr _skiaNativeHandle;
 
     // Windows API: 添加 DLL 搜索目录
     [SupportedOSPlatform("windows")]
@@ -33,6 +35,8 @@ public static class PrivatePathHelper
         {
             string baseDirectory = AppContext.BaseDirectory;
             var libsPath = Path.Combine(baseDirectory, AppContext.GetData("SubdirectoriesToProbe") as string ?? "libs");
+
+            RegisterSkiaNativeResolver(baseDirectory, libsPath);
 
             lock (_resolverLock)
             {
@@ -120,10 +124,25 @@ public static class PrivatePathHelper
 
                             string? libraryPath = null;
 
-                            // 首先在 libs 文件夹中查找
+                            // 1) 先在 libs 文件夹中查找
                             if (Directory.Exists(libsPath))
                             {
                                 libraryPath = FindLibraryInLibs(libsPath, libraryName);
+                            }
+
+                            // 2) 通用解析的兜底路径；SkiaSharp 使用上面注册的定向解析器。
+                            if (libraryPath == null)
+                            {
+                                var runtimeNativePath = Path.Combine(
+                                    AppContext.BaseDirectory,
+                                    "runtimes",
+                                    System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier,
+                                    "native");
+
+                                if (Directory.Exists(runtimeNativePath))
+                                {
+                                    libraryPath = FindLibraryInLibs(runtimeNativePath, libraryName);
+                                }
                             }
 
                             if (libraryPath != null)
@@ -171,6 +190,48 @@ public static class PrivatePathHelper
                 LoggerHelper.Warning($"初始化原生库解析器失败：{ex.Message}");
             }
             catch { }
+        }
+    }
+
+    private static void RegisterSkiaNativeResolver(string baseDirectory, string libsPath)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        const string nativeName = "libSkiaSharp.dll";
+        var runtimePath = Path.Combine(baseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", nativeName);
+        var libraryPath = File.Exists(runtimePath) ? runtimePath : Path.Combine(libsPath, nativeName);
+        if (!File.Exists(libraryPath))
+            return;
+
+        lock (_resolverLock)
+        {
+            if (_skiaResolverRegistered)
+                return;
+
+            try
+            {
+                NativeLibrary.SetDllImportResolver(typeof(SkiaSharp.SKObject).Assembly, (name, _, _) =>
+                {
+                    if (!string.Equals(Path.GetFileNameWithoutExtension(name), "libSkiaSharp", StringComparison.OrdinalIgnoreCase))
+                        return IntPtr.Zero;
+
+                    lock (_resolverLock)
+                    {
+                        if (_skiaNativeHandle == IntPtr.Zero)
+                        {
+                            _skiaNativeHandle = NativeLibrary.Load(libraryPath);
+                            LoggerHelper.Info($"已从包内加载 SkiaSharp 原生库：{libraryPath}");
+                        }
+                        return _skiaNativeHandle;
+                    }
+                });
+                _skiaResolverRegistered = true;
+            }
+            catch (InvalidOperationException ex)
+            {
+                LoggerHelper.Warning($"无法注册 SkiaSharp 原生库解析器：{ex.Message}");
+            }
         }
     }
 
@@ -382,6 +443,9 @@ public static class PrivatePathHelper
                 // 如果同目录中的文件在 libs 或 runtimes 中也存在，删除同目录中的文件
                 if (duplicateFiles.Contains(fileInfo.Name))
                 {
+                    if (!IsUnmanagedLibrary(fileInfo))
+                        continue;
+
                     try
                     {
                         fileInfo.Delete();
@@ -429,5 +493,25 @@ public static class PrivatePathHelper
     private static bool IsNativeLibrary(string extension)
     {
         return extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) || extension.Equals(".so", StringComparison.OrdinalIgnoreCase) || extension.Equals(".dylib", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUnmanagedLibrary(FileInfo file)
+    {
+        if (!file.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        try
+        {
+            _ = AssemblyName.GetAssemblyName(file.FullName);
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
