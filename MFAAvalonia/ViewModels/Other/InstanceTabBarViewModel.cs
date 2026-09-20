@@ -600,6 +600,7 @@ public partial class InstanceTabBarViewModel : ViewModelBase
             }
         }
 
+        ReloadTabs();
         var tab = Tabs.FirstOrDefault(t => t.Processor == processor);
         if (tab != null)
         {

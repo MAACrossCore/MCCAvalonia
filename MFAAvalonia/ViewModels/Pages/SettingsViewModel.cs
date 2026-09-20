@@ -8,10 +8,12 @@ using MFAAvalonia.Extensions.MaaFW;
 using MFAAvalonia.Helper;
 using MFAAvalonia.Helper.ValueType;
 using MFAAvalonia.ViewModels.Other;
+using System;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 
 namespace MFAAvalonia.ViewModels.Pages;
@@ -147,38 +149,47 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty] private string _newConfigurationName = string.Empty;
 
     [RelayCommand]
-    private void AddConfiguration()
+    private async Task AddConfiguration()
     {
-        // 如果用户输入了名称，检查是否已存在
-        if (!string.IsNullOrWhiteSpace(NewConfigurationName))
+        var requestedName = NewConfigurationName?.Trim() ?? string.Empty;
+        if (!string.IsNullOrEmpty(requestedName))
         {
             var configExists = ConfigurationList.Any(tab =>
-                tab.Name.Equals(NewConfigurationName, System.StringComparison.OrdinalIgnoreCase));
+                tab.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase));
             
             if (configExists)
             {
-                ToastHelper.Error(LangKeys.ConfigNameAlreadyExists.ToLocalizationFormatted(false, NewConfigurationName));
+                ToastHelper.Error(LangKeys.ConfigNameAlreadyExists.ToLocalizationFormatted(false, requestedName));
                 return;
             }
         }
-        
-        // 添加新的多开实例
-        Instances.InstanceTabBarViewModel.AddInstanceCommand.Execute(null);
-        
-        // 如果用户输入了名称，则设置实例名称
-        if (!string.IsNullOrWhiteSpace(NewConfigurationName))
+
+        var tabVm = Instances.InstanceTabBarViewModel;
+        var existingIds = ConfigurationList.Select(tab => tab.InstanceId).ToHashSet();
+        try
         {
-            var newTab = Instances.InstanceTabBarViewModel.ActiveTab;
-            if (newTab != null)
+            await tabVm.AddInstanceCommand.ExecuteAsync(null);
+
+            var newTab = ConfigurationList.FirstOrDefault(tab => !existingIds.Contains(tab.InstanceId));
+            if (newTab == null)
             {
-                MaaProcessorManager.Instance.SetInstanceName(newTab.InstanceId, NewConfigurationName);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(requestedName))
+            {
+                MaaProcessorManager.Instance.SetInstanceName(newTab.InstanceId, requestedName);
                 newTab.UpdateName();
             }
+
             NewConfigurationName = string.Empty;
+            ToastHelper.Success(LangKeys.ConfigAddedSuccessfully.ToLocalizationFormatted(false, newTab.Name));
         }
-        
-        ToastHelper.Success(LangKeys.ConfigAddedSuccessfully.ToLocalizationFormatted(false,
-            Instances.InstanceTabBarViewModel.ActiveTab?.Name ?? ""));
+        catch (Exception ex)
+        {
+            LoggerHelper.Error($"新增配置失败：{ex.Message}", ex);
+            ToastHelper.Error($"新增配置失败：{ex.Message}");
+        }
     }
 
     #endregion 多开实例管理
