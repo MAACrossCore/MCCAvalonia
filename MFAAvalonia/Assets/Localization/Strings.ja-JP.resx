@@ -2096,7 +2096,10 @@
   <data name="TutorialStepRewatchDesc" xml:space="preserve">
         <value>If you need to review this tutorial later, you can find the "Tutorial" button at the bottom of Settings → About page to re-watch it anytime.</value>
     </data>
-  <data name="Tutorial" xml:space="preserve">
+  <data name="Manual" xml:space="preserve">
+        <value>操作マニュアル</value>
+    </data>
+    <data name="Tutorial" xml:space="preserve">
         <value>Tutorial</value>
     </data>
   <data name="SpecialTask_KillSelfProcess" xml:space="preserve">

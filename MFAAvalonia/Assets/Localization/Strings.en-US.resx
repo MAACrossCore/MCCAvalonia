@@ -1915,6 +1915,9 @@ Please do not copy only the main executable by itself.</value>
     <data name="TutorialStepRewatchDesc" xml:space="preserve">
         <value>If you need to review this tutorial later, you can find the "Tutorial" button at the bottom of Settings → About page to re-watch it anytime.</value>
     </data>
+    <data name="Manual" xml:space="preserve">
+        <value>User Manual</value>
+    </data>
     <data name="Tutorial" xml:space="preserve">
         <value>Tutorial</value>
     </data>

@@ -647,6 +647,7 @@ public static class LangKeys
 	public static readonly string TutorialStepRewatchTitle = "TutorialStepRewatchTitle";
 	public static readonly string TutorialStepRewatchDesc = "TutorialStepRewatchDesc";
 	public static readonly string Tutorial = "Tutorial";
+	public static readonly string Manual = "Manual";
 	public static readonly string SpecialTask = "SpecialTask";
 	public static readonly string SpecialTask_Countdown = "SpecialTask_Countdown";
 	public static readonly string SpecialTask_TimedWait = "SpecialTask_TimedWait";

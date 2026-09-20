@@ -132,6 +132,20 @@ public partial class AboutUserControl : UserControl
         }
     }
 
+    private const string ManualUrl = "https://my.feishu.cn/docx/TXJPd9AmnoqrKIxrduGcQpQln0c";
+
+    private void OpenManual_Click(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Markdown.Avalonia.Utils.DefaultHyperlinkCommand.GoTo(ManualUrl);
+        }
+        catch (Exception ex)
+        {
+            LoggerHelper.Error($"打开操作手册失败：{ex.Message}");
+        }
+    }
+
     private void StartTutorial_Click(object? sender, RoutedEventArgs e)
     {
         var rootContent = this.GetVisualAncestors().OfType<RootViewContent>().FirstOrDefault();

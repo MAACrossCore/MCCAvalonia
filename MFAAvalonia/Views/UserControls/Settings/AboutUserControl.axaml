@@ -319,6 +319,28 @@
                 </StackPanel>
             </DockPanel>
         </suki:GlassCard>
+        <suki:GlassCard Padding="25,8,25,8" Name="ManualCard">
+            <DockPanel>
+                <Button BorderBrush="Transparent"
+                        BorderThickness="0"
+                        Click="OpenManual_Click"
+                        Content="{fluent:FluentIcon Icon=Send,
+                                                          IconSize=Size16}"
+                        DockPanel.Dock="Right"
+                        Height="40"
+                        HorizontalAlignment="Center"
+                        Margin="0,0,4,0" />
+                <StackPanel HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <ContentControl Content="{fluent:FluentIcon Icon=BookOpen, IconSize=Size20}" />
+                    <TextBlock FontSize="16"
+                               FontWeight="SemiBold"
+                               Text="{markup:I18n {x:Static helper:LangKeys.Manual}}"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+            </DockPanel>
+        </suki:GlassCard>
         <suki:GlassCard Padding="25,8,25,8" Name="TutorialCard">
             <DockPanel>
                 <Button BorderBrush="Transparent"

@@ -1915,6 +1915,9 @@
     <data name="TutorialStepRewatchDesc" xml:space="preserve">
         <value>如果以後需要再次查看使用教學，可以在「設定」→「關於我們」頁面底部找到「使用教學」按鈕，隨時重新觀看。</value>
     </data>
+    <data name="Manual" xml:space="preserve">
+        <value>操作手冊</value>
+    </data>
     <data name="Tutorial" xml:space="preserve">
         <value>使用教學</value>
     </data>
