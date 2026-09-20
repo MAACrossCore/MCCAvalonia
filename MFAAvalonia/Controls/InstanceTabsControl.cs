@@ -30,13 +30,14 @@ public class InstanceTabsControl : TabControl
     private ICommand _closeItemCommand;
     private Border? _tabBarBackground;
     private bool _clipDirty = true;
+    private bool _clipUpdateScheduled;
     private int _overflowCount;
     private Button? _overflowButton;
     private TextBlock? _overflowText;
     private Border? _clipBoundsSource;
     private bool _suspendComplexTabClips;
-    private int _lastClipLayoutStamp = int.MinValue;
     private bool _clipRetryScheduled;
+    private int _clipRetryCount;
 
     public static readonly DirectProperty<InstanceTabsControl, int> OverflowCountProperty =
         AvaloniaProperty.RegisterDirect<InstanceTabsControl, int>(
@@ -159,27 +160,33 @@ public class InstanceTabsControl : TabControl
        _overflowText = e.NameScope.Find<TextBlock>("PART_OverflowText");
        if (_overflowButton != null)
            _overflowButton.Click += (_, _) => OverflowButtonClicked?.Invoke();
-       LayoutUpdated -= OnLayoutUpdated;
-       LayoutUpdated += OnLayoutUpdated;
        InvalidateClip();
    }
 
     private void InvalidateClip()
     {
         _clipDirty = true;
-        Dispatcher.UIThread.Post(ApplyClipIfDirty, DispatcherPriority.Render);
+        if (_clipUpdateScheduled)
+            return;
+
+        _clipUpdateScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _clipUpdateScheduled = false;
+            ApplyClipIfDirty();
+        }, DispatcherPriority.Render);
     }
 
     private void ScheduleClipRetry()
     {
-        if (_clipRetryScheduled)
+        if (_clipRetryScheduled || _clipRetryCount >= 3)
             return;
 
         _clipRetryScheduled = true;
+        _clipRetryCount++;
         Dispatcher.UIThread.Post(() =>
         {
             _clipRetryScheduled = false;
-            _lastClipLayoutStamp = int.MinValue;
             InvalidateClip();
         }, DispatcherPriority.Loaded);
     }
@@ -189,8 +196,16 @@ public class InstanceTabsControl : TabControl
         if (!_clipDirty) return;
         _clipDirty = false;
         UpdateTabSeparatorStates();
-        UpdateTabBarBackgroundClip();
-        UpdateNonSelectedTabClips();
+
+        // Clip geometry causes the tab bar to continually invalidate its layout
+        // as instances are added. Keep the tab styling, but skip these masks.
+        if (_tabBarBackground?.Clip != null)
+            _tabBarBackground.Clip = null;
+        foreach (var tab in DragTabItems(false))
+        {
+            if (tab.Clip != null)
+                tab.Clip = null;
+        }
     }
 
     /// <summary>
@@ -235,53 +250,6 @@ public class InstanceTabsControl : TabControl
     {
         if (e.Property == BoundsProperty)
             InvalidateClip();
-    }
-
-    private void OnLayoutUpdated(object? sender, EventArgs e)
-    {
-        var stamp = ComputeClipLayoutStamp();
-        if (stamp != _lastClipLayoutStamp)
-        {
-            _lastClipLayoutStamp = stamp;
-            _clipDirty = true;
-        }
-
-        ApplyClipIfDirty();
-    }
-
-    private int ComputeClipLayoutStamp()
-    {
-        var h = new HashCode();
-        h.Add(Items.Count);
-        h.Add(SelectedIndex);
-        h.Add(_suspendComplexTabClips);
-
-        if (_tabBarBackground != null)
-        {
-            h.Add((int)Math.Round(_tabBarBackground.Bounds.X));
-            h.Add((int)Math.Round(_tabBarBackground.Bounds.Y));
-            h.Add((int)Math.Round(_tabBarBackground.Bounds.Width));
-            h.Add((int)Math.Round(_tabBarBackground.Bounds.Height));
-        }
-        else
-        {
-            h.Add(0);
-        }
-
-        foreach (var tab in DragTabItems(false))
-        {
-            h.Add(tab.IsVisible);
-            h.Add((int)Math.Round(tab.Bounds.X));
-            h.Add((int)Math.Round(tab.Bounds.Y));
-            h.Add((int)Math.Round(tab.Bounds.Width));
-            h.Add((int)Math.Round(tab.Bounds.Height));
-            h.Add((int)Math.Round(tab.X));
-            h.Add((int)Math.Round(tab.Y));
-            h.Add(tab.LogicalIndex);
-            h.Add(tab.IsSelected);
-        }
-
-        return h.ToHashCode();
     }
 
     /// <summary>
@@ -351,51 +319,25 @@ public class InstanceTabsControl : TabControl
     private const double CurveRadius = 5;
 
     /// <summary>
-    /// 标签顶部圆角半径（与 DragTabItem CornerRadius="6,6,0,0" 一致）
+    /// 裁剪区域只需覆盖标签主体。使用矩形避免多标签时曲线路径布尔运算
+    /// 在 Skia 中长时间占用界面线程；标签本身的圆角仍由模板绘制。
     /// </summary>
-    private const double TabCornerRadius = 6;
-
-    /// <summary>
-    /// 创建标签形状的 StreamGeometry（带曲线脚和圆角顶部），
-    /// 坐标相对于 referenceControl。
-    /// 曲线脚延伸到标签边界之外，主体匹配全宽 Border（CornerRadius="6,6,0,0"）。
-    /// </summary>
-    private StreamGeometry? CreateTabShapeGeometry(DragTabItem tab, Control referenceControl, double totalHeight, double extraExtend = 0)
+    private RectangleGeometry? CreateTabShapeGeometry(DragTabItem tab, Control referenceControl, double totalHeight, double extraExtend = 0)
     {
         var tabBounds = tab.Bounds;
         var transform = tab.TranslatePoint(new Point(0, 0), referenceControl);
         if (transform == null) return null;
 
-        var L = transform.Value.X - extraExtend;
-        var R = L + tabBounds.Width + extraExtend * 2;
-        var T = transform.Value.Y;
-        var H = totalHeight;
-        var cw = CurveRadius;
-        var cr = TabCornerRadius;
+        var left = transform.Value.X - extraExtend;
+        var top = transform.Value.Y;
+        var width = tabBounds.Width + extraExtend * 2;
+        var height = totalHeight - top;
+        if (!double.IsFinite(left) || !double.IsFinite(top) ||
+            !double.IsFinite(width) || !double.IsFinite(height) ||
+            width <= 0 || height <= 0)
+            return null;
 
-        var geo = new StreamGeometry();
-        using (var ctx = geo.Open())
-        {
-            // 从左下角开始（曲线脚延伸到标签左边界之外）
-            ctx.BeginFigure(new Point(L - cw, H), true);
-            // 左侧内凹曲线脚
-            ctx.ArcTo(new Point(L, H - cw), new Size(cw, cw), 0, false, SweepDirection.CounterClockwise);
-            // 左侧直线上升到左上圆角
-            ctx.LineTo(new Point(L, T + cr));
-            // 左上圆角（外凸，与 Border CornerRadius 一致）
-            ctx.ArcTo(new Point(L + cr, T), new Size(cr, cr), 0, false, SweepDirection.Clockwise);
-            // 顶部直线
-            ctx.LineTo(new Point(R - cr, T));
-            // 右上圆角（外凸）
-            ctx.ArcTo(new Point(R, T + cr), new Size(cr, cr), 0, false, SweepDirection.Clockwise);
-            // 右侧直线下降到曲线脚
-            ctx.LineTo(new Point(R, H - cw));
-            // 右侧内凹曲线脚
-            ctx.ArcTo(new Point(R + cw, H), new Size(cw, cw), 0, false, SweepDirection.CounterClockwise);
-            ctx.EndFigure(true);
-        }
-
-        return geo;
+        return new RectangleGeometry(new Rect(left, top, width, height));
     }
 
     /// <summary>
@@ -436,6 +378,7 @@ public class InstanceTabsControl : TabControl
         }
 
         _clipRetryScheduled = false;
+        _clipRetryCount = 0;
 
         var fullRect = new RectangleGeometry(new Rect(0, 0, totalBounds.Width, totalBounds.Height));
         Geometry clipGeo = new CombinedGeometry(GeometryCombineMode.Exclude, fullRect, selectedShape);
