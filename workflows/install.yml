@@ -376,7 +376,10 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          # Google no longer serves the legacy `tools` package that v3 tried to install.
+          packages: platform-tools
 
       - name: Install Android SDK, build tools and NDK
         shell: bash
