@@ -3679,10 +3679,7 @@ public class MaaProcessor
             {
                 completedWithFailures = true;
                 if (result.ContinueQueue)
-                {
-                    await TryRecoverAfterTaskFailureAsync(task.Name, token);
                     continue;
-                }
             }
 
             if (result.Status != MFATask.MFATaskStatus.SUCCEEDED)
@@ -4405,36 +4402,6 @@ public class MaaProcessor
         await ScriptRunner.RunScriptAsync(str, InstanceConfiguration);
     }
 
-    private async Task TryRecoverAfterTaskFailureAsync(string? taskName, CancellationToken token)
-    {
-        if (token.IsCancellationRequested)
-            return;
-
-        AddLog($"任务「{LanguageHelper.GetLocalizedString(taskName)}」失败，结束当前任务并继续后续队列。");
-        // The optional resource hook must not add non-standard interface fields.
-        const string entry = "任务失败_返回主页";
-        if (MaaTasker == null)
-            return;
-
-        try
-        {
-            var recoveryStatus = await TryRunTasksAsync(MaaTasker, entry, null, token);
-            token.ThrowIfCancellationRequested();
-            AddLog(recoveryStatus == MaaJobStatus.Succeeded
-                ? "失败任务已回到主页，继续下一个任务。"
-                : "未能回到主页，继续尝试下一个任务。");
-        }
-        catch (Exception) when (token.IsCancellationRequested)
-        {
-            // The queue cancellation remains authoritative during recovery.
-        }
-        catch (Exception ex)
-        {
-            LoggerHelper.Warning($"任务失败后的主页恢复未完成：{ex.Message}");
-            AddLog("主页恢复未完成，继续尝试下一个任务。");
-        }
-    }
-
     private void AddPostTasksAsync(bool onlyStart, bool checkUpdate, CancellationToken token)
     {
         if (!onlyStart)
@@ -4465,7 +4432,8 @@ public class MaaProcessor
             OwnerViewModel = ViewModel,
             SourceItem = sourceItem,
             RunId = runId,
-            ContinueOnError = true
+            // Project policy: a failed task must stop the queue instead of starting the next task.
+            ContinueOnError = false
         };
     }
 
