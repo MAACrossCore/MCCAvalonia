@@ -75,8 +75,6 @@ public partial class MFATask : ObservableObject
             if (Count < 0)
                 Count = int.MaxValue;
             OwnerViewModel?.MarkTaskRunning(SourceItem, RunId);
-            var hasFailed = false;
-            string? failureMessage = null;
             for (int i = 0; i < Count; i++)
             {
                 token.ThrowIfCancellationRequested();
@@ -91,13 +89,8 @@ public partial class MFATask : ObservableObject
                     token.ThrowIfCancellationRequested();
                     if (jobStatus != MaaJobStatus.Succeeded)
                     {
-                        hasFailed = true;
-                        failureMessage = jobStatus.ToString();
-                        if (!ContinueOnError)
-                        {
-                            MarkFailed(failureMessage);
-                            return Complete(MFATaskStatus.FAILED);
-                        }
+                        MarkFailed(jobStatus.ToString());
+                        return Complete(MFATaskStatus.FAILED, ContinueOnError);
                     }
                 }
                 else
@@ -107,13 +100,7 @@ public partial class MFATask : ObservableObject
                 }
                 OwnerViewModel?.MarkTaskIterationCompleted(SourceItem, RunId);
             }
-            if (hasFailed)
-            {
-                MarkFailed(failureMessage);
-                return Complete(MFATaskStatus.FAILED, ContinueOnError);
-            }
-            else
-                OwnerViewModel?.MarkTaskSucceeded(SourceItem, RunId);
+            OwnerViewModel?.MarkTaskSucceeded(SourceItem, RunId);
             return Complete(MFATaskStatus.SUCCEEDED);
         }
         catch (Exception) when (token.IsCancellationRequested)
